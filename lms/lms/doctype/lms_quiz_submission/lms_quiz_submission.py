@@ -1,0 +1,111 @@
+# Copyright (c) 2021, FOSS United and contributors
+# For license information, please see license.txt
+
+import frappe
+from frappe import _
+from frappe.desk.doctype.notification_log.notification_log import make_notification_logs
+from frappe.model.document import Document
+from frappe.utils import cint
+
+from lms.lms.html_sanitizer import sanitize_rich_text
+
+
+class LMSQuizSubmission(Document):
+	def validate(self):
+		self.validate_if_max_attempts_exceeded()
+		# Graded submissions must stay saveable after the quiz's questions change.
+		if self.is_new():
+			self.validate_result_questions()
+		self.sanitize_result_html()
+		self.validate_marks()
+		self.set_percentage()
+
+	def sanitize_result_html(self):
+		"""A child doctype fires no doc_events, so the parent cleans its rows. Both fields
+		render outside the SPA (reports, exports, the jinja portal)."""
+		for row in self.result:
+			row.answer = sanitize_rich_text(row.answer)
+			row.question = sanitize_rich_text(row.question)
+
+	def on_update(self):
+		self.notify_member()
+
+	def validate_if_max_attempts_exceeded(self):
+		max_attempts = frappe.db.get_value("LMS Quiz", self.quiz, ["max_attempts"])
+		if max_attempts == 0:
+			return
+
+		current_user_submission_count = frappe.db.count(
+			self.doctype, filters={"quiz": self.quiz, "member": self.member}
+		)
+		if current_user_submission_count >= max_attempts:
+			frappe.throw(
+				_("You have exceeded the maximum number of attempts ({0}) for this quiz").format(
+					max_attempts
+				),
+				MaximumAttemptsExceededError,
+			)
+
+	def validate_result_questions(self):
+		quiz_questions = set(
+			frappe.get_all(
+				"LMS Quiz Question",
+				filters={"parent": self.quiz, "parenttype": "LMS Quiz"},
+				pluck="question",
+			)
+		)
+		answered = set()
+		for row in self.result:
+			if row.question_name not in quiz_questions:
+				frappe.throw(_("Row {0}: this question is not part of the quiz.").format(row.idx))
+			if row.question_name in answered:
+				frappe.throw(
+					_("Row {0}: this question is already answered in this submission.").format(row.idx)
+				)
+			answered.add(row.question_name)
+
+		limit = cint(frappe.db.get_value("LMS Quiz", self.quiz, "limit_questions_to"))
+		if limit and len(self.result) > limit:
+			frappe.throw(_("This quiz takes answers to at most {0} questions.").format(limit))
+
+	def validate_marks(self):
+		self.score = 0
+		for row in self.result:
+			if cint(row.marks) > cint(row.marks_out_of):
+				frappe.throw(
+					_(
+						"Marks for question number {0} cannot be greater than the marks allotted for that question."
+					).format(row.idx)
+				)
+			else:
+				self.score += cint(row.marks)
+
+	def set_percentage(self):
+		if self.score and self.score_out_of:
+			# Floored at zero, or negative marking throws the whole submission away.
+			self.percentage = max(0, (self.score / self.score_out_of) * 100)
+
+	def notify_member(self):
+		if self.score != 0 and self.has_value_changed("score"):
+			notification = frappe._dict(
+				{
+					"subject": _("You have got a score of {0} for the quiz {1}").format(
+						(frappe.bold(self.score)), frappe.bold(self.quiz_title)
+					),
+					"email_content": _(
+						"There has been an update on your submission. You have got a score of {0} for the quiz {1}"
+					).format(frappe.bold(self.score), frappe.bold(self.quiz_title)),
+					"document_type": self.doctype,
+					"document_name": self.name,
+					"for_user": self.member,
+					"from_user": frappe.session.user,
+					"type": "Alert",
+					"link": "",
+				}
+			)
+
+			make_notification_logs(notification, [self.member])
+
+
+class MaximumAttemptsExceededError(frappe.DuplicateEntryError):
+	pass

@@ -1,0 +1,72 @@
+@import 'frappe-ui/style.css';
+@import './styles/blockEditor.css';
+
+/* frappe-ui paints no document background, so dark mode showed the UA's white
+   wherever no element covers the canvas. Precedent: helpdesk/desk/src/index.css. */
+html {
+	background-color: var(--surface-base);
+	color-scheme: light;
+}
+
+/* lucide-vue-next defaults to stroke 2; match frappe-ui's own 1.5 icons. */
+svg.lucide {
+	stroke-width: 1.5;
+}
+
+/* 48px, the desk header's height. The property is the single source so the
+   scroll containers below clear exactly the header (WCAG 2.4.11). */
+:root {
+	--header-frame-h: 3rem;
+}
+
+.header-frame {
+	@apply flex shrink-0 items-center border-b border-outline-gray-1 bg-surface-base px-5;
+	min-height: var(--header-frame-h);
+}
+
+/* Keep focused elements from hiding under the sticky header. */
+main#scrollContainer,
+main#main-content {
+	scroll-padding-block-start: var(--header-frame-h);
+}
+
+/* frappe-ui swaps the dark-mode checkbox tick but ships no radio equivalent, so
+   a checked native radio is invisible in dark mode. */
+[data-theme='dark'] [type='radio']:checked {
+	/* token-exempt: a data-URI fill cannot read var(); same ink as frappe-ui's dark checkbox tick */
+	background-image: url("data:image/svg+xml,%3csvg viewBox='0 0 16 16' fill='%230F0F0F' xmlns='http://www.w3.org/2000/svg'%3e%3ccircle cx='8' cy='8' r='3'/%3e%3c/svg%3e");
+}
+
+/* frappe-ui makes --surface-sidebar transparent in dark mode; keep a visible surface. */
+[data-theme='dark'] {
+	color-scheme: dark;
+	--surface-sidebar: var(--surface-gray-1);
+}
+
+/* Pin a Combobox/MultiSelect dropdown footer so its actions stay reachable while
+   options scroll. Unscoped since frappe-ui popovers portal to <body>. */
+[data-slot='content-body']
+	[data-slot='footer']:has(> [data-popover-footer-sticky]) {
+	position: sticky;
+	bottom: -0.25rem;
+	z-index: 1;
+}
+
+/* A tall dropdown menu otherwise overflows the viewport and clips its last rows. */
+.menu-content[data-slot='content'] {
+	max-height: var(--reka-popper-available-height);
+	overflow-y: auto;
+}
+
+/* Popover panels size to their longest option and overflow a phone screen;
+   clamp them so rows truncate and floating-ui shifts the panel into view. */
+@media (max-width: 639.98px) {
+	[data-slot='content-body'] {
+		max-width: calc(100vw - 2rem);
+	}
+}
+
+/* frappe-ui's --ink-gray-2 bullets are near-invisible; match the ink-gray-4 counters. */
+.prose {
+	--tw-prose-bullets: var(--ink-gray-4);
+}

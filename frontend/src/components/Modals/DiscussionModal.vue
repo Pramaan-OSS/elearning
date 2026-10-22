@@ -1,0 +1,122 @@
+<template>
+	<Dialog
+		v-model:open="open"
+		:title="singularize(props.title)"
+		size="2xl"
+		:actions="[
+			{
+				label: 'Post',
+				variant: 'solid',
+				onClick: ({ close }) => submitTopic(close),
+			},
+		]"
+	>
+		<template #default>
+			<div class="flex flex-col gap-4">
+				<div>
+					<FormControl
+						v-model="topic.title"
+						:label="__('Title')"
+						type="text"
+						variant="outline"
+					/>
+				</div>
+				<div>
+					<InputLabel
+						:id="detailsLabelId"
+						class="mb-1.5"
+						:label="__('Details')"
+					/>
+					<RichTextEditor
+						:ariaLabelledby="detailsLabelId"
+						:content="topic.reply"
+						@change="(val) => (topic.reply = val)"
+						:editable="true"
+						:fixedMenu="true"
+						minHeight="7rem"
+					/>
+				</div>
+			</div>
+		</template>
+	</Dialog>
+</template>
+<script setup>
+import { call, Dialog, FormControl, toast } from 'frappe-ui'
+import { reactive, useId } from 'vue'
+import { InputLabel } from 'frappe-ui/experimental'
+import { singularize } from '@/utils'
+import RichTextEditor from '@/components/RichTextEditor.vue'
+
+const open = defineModel('modelValue')
+const topics = defineModel('reloadTopics')
+const emit = defineEmits(['created'])
+const detailsLabelId = useId()
+
+const props = defineProps({
+	title: {
+		type: String,
+		required: true,
+	},
+	doctype: {
+		type: String,
+		required: true,
+	},
+	docname: {
+		type: String,
+		required: true,
+	},
+})
+
+const topic = reactive({
+	title: '',
+	reply: '',
+})
+
+const submitTopic = (close) => {
+	if (!topic.title) {
+		toast.error(__('Title cannot be empty.'))
+		return
+	}
+	if (!topic.reply) {
+		toast.error(__('Details cannot be empty.'))
+		return
+	}
+	call('frappe.client.insert', {
+		doc: {
+			doctype: 'Discussion Topic',
+			reference_doctype: props.doctype,
+			reference_docname: props.docname,
+			title: topic.title,
+		},
+	})
+		.then((data) => {
+			createReply(data.name, close)
+		})
+		.catch((err) => {
+			toast.error(err.messages?.[0] || err)
+			console.error(err)
+		})
+}
+
+const createReply = (topicName, close) => {
+	call('frappe.client.insert', {
+		doc: {
+			doctype: 'Discussion Reply',
+			topic: topicName,
+			reply: topic.reply,
+		},
+	})
+		.then((data) => {
+			topic.title = ''
+			topic.reply = ''
+			Promise.resolve(topics.value.reload()).then(() =>
+				emit('created', topicName)
+			)
+			close()
+		})
+		.catch((err) => {
+			toast.error(err.messages?.[0] || err)
+			console.error(err)
+		})
+}
+</script>

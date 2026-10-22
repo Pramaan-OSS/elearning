@@ -1,0 +1,641 @@
+<template>
+	<div class="">
+		<div class="grid grid-cols-1 lg:grid-cols-[3fr,2fr]">
+			<div v-if="batchDetail.doc" class="py-5 lg:h-[88vh] lg:overflow-y-auto">
+				<div class="px-5 pb-5 space-y-5 border-b mb-5">
+					<h2 class="text-base-semibold text-ink-gray-9">
+						{{ __('Details') }}
+					</h2>
+
+					<div class="grid grid-cols-1 md:grid-cols-2 gap-5">
+						<FormControl
+							v-model="batchDetail.doc.title"
+							:label="__('Title')"
+							:required="true"
+							variant="outline"
+							class="w-full"
+						/>
+						<Link
+							v-model="batchDetail.doc.category"
+							doctype="LMS Category"
+							:label="__('Category')"
+							:inlineCreate="true"
+							variant="outline"
+							:onCreate="createCategory"
+						/>
+						<FormControl
+							v-model="batchDetail.doc.start_date"
+							:label="__('Batch Start Date')"
+							type="date"
+							:format="dateFormat"
+							:required="true"
+							variant="outline"
+						/>
+						<FormControl
+							v-model="batchDetail.doc.end_date"
+							:label="__('Batch End Date')"
+							type="date"
+							:format="dateFormat"
+							:required="true"
+							variant="outline"
+						/>
+
+						<FormControl
+							v-model="batchDetail.doc.start_time"
+							type="time"
+							:label="__('Session Start Time')"
+							:required="true"
+							variant="outline"
+						/>
+						<FormControl
+							v-model="batchDetail.doc.end_time"
+							type="time"
+							:label="__('Session End Time')"
+							:required="true"
+							variant="outline"
+						/>
+						<Combobox
+							v-model="batchDetail.doc.timezone"
+							:options="timezoneOptions"
+							:placeholder="__('Select timezone')"
+							:label="__('Timezone')"
+							:required="true"
+							variant="outline"
+							class="w-full"
+						/>
+
+						<FormControl
+							v-model="batchDetail.doc.seat_count"
+							:label="__('Seat Count')"
+							type="number"
+							variant="outline"
+							:placeholder="__('Number of seats available')"
+						/>
+					</div>
+				</div>
+
+				<div class="px-5 pb-5 space-y-5 border-b mb-5">
+					<h2 class="text-base-semibold text-ink-gray-9">
+						{{ __('Enrollment & Certification') }}
+					</h2>
+					<div class="grid grid-cols-1 md:grid-cols-2 gap-5 items-start">
+						<BooleanSwitch
+							size="sm"
+							v-model="batchDetail.doc.allow_self_enrollment"
+							:label="__('Allow Self Enrollment')"
+							:description="
+								__('Allow users to enroll in this batch on their own.')
+							"
+						/>
+						<BooleanSwitch
+							size="sm"
+							v-model="batchDetail.doc.certification"
+							:label="__('Certification')"
+							:description="__('Issue certificates to batch participants.')"
+						/>
+						<div class="space-y-4">
+							<BooleanSwitch
+								size="sm"
+								v-model="batchDetail.doc.paid_batch"
+								:label="__('Paid Batch')"
+								:description="__('Charge a fee for batch enrollment.')"
+							/>
+							<div
+								v-if="batchDetail.doc.paid_batch"
+								class="grid grid-cols-1 md:grid-cols-2 gap-3"
+							>
+								<FormControl
+									v-model="batchDetail.doc.amount"
+									:label="__('Amount')"
+									type="number"
+									variant="outline"
+								/>
+								<Link
+									doctype="Currency"
+									v-model="batchDetail.doc.currency"
+									:filters="{ enabled: 1 }"
+									:label="__('Currency')"
+									variant="outline"
+								/>
+							</div>
+						</div>
+						<div class="space-y-4">
+							<BooleanSwitch
+								size="sm"
+								v-model="batchDetail.doc.evaluation"
+								:label="__('Evaluation')"
+								:description="__('Enable evaluations for batch participants.')"
+							/>
+							<FormControl
+								v-if="batchDetail.doc.evaluation"
+								v-model="batchDetail.doc.evaluation_end_date"
+								:label="__('Evaluation End Date')"
+								type="date"
+								:format="dateFormat"
+								variant="outline"
+							/>
+						</div>
+					</div>
+				</div>
+
+				<div class="px-5 pb-5 space-y-5 border-b mb-5">
+					<h2 class="text-base-semibold text-ink-gray-9">
+						{{ __('Batch overview') }}
+					</h2>
+					<div class="grid grid-cols-1 md:grid-cols-2 gap-5">
+						<MultiLink
+							v-model="instructors"
+							doctype="User"
+							url="lms.lms.api.search_users_by_role"
+							:searchParams="{
+								roles: JSON.stringify(['Batch Evaluator', 'Course Creator']),
+							}"
+							:label="__('Instructors')"
+							:placeholder="__('Select instructors')"
+							:required="true"
+							:disabled="!batch.data?.can_change_instructors"
+							variant="outline"
+							:onCreate="() => (showMemberModal = true)"
+						>
+							<template #summary="{ selected, summary }">
+								{{
+									selected.length
+										? summarisePeople(selected.map((o) => o.label))
+										: summary
+								}}
+							</template>
+						</MultiLink>
+						<Select
+							v-model="batchDetail.doc.medium"
+							:label="__('Medium')"
+							:options="mediumOptions"
+							variant="outline"
+							class="w-full"
+						/>
+						<Link
+							ref="emailTemplateLinkRef"
+							doctype="Email Template"
+							:label="__('Enrollment Confirmation Email Template')"
+							v-model="batchDetail.doc.confirmation_email_template"
+							variant="outline"
+							:onCreate="openEmailTemplateForm"
+						/>
+						<FormControl
+							v-model="batchDetail.doc.description"
+							:label="__('Short Description')"
+							type="textarea"
+							:placeholder="__('Short description of the batch')"
+							:required="true"
+							variant="outline"
+							class="md:col-span-2"
+						/>
+					</div>
+					<VideoPreviewField
+						v-model="batchDetail.doc.video_link"
+						:label="__('Preview Video')"
+					/>
+					<div class="space-y-1.5">
+						<InputLabel
+							:id="batchDetailsLabelId"
+							:for-id="batchDetailsId"
+							:label="__('Batch Details')"
+							:required="true"
+						/>
+						<div
+							class="rounded-t-6 rounded-b-5 outline-none transition-[box-shadow] duration-150 ease-[cubic-bezier(0.23,1,0.32,1)]"
+						>
+							<RichTextEditor
+								:id="batchDetailsId"
+								:ariaLabelledby="batchDetailsLabelId"
+								:content="batchDetail.doc.batch_details"
+								@change="(val: string) => updateBatchDetails(val)"
+								:editable="true"
+								:fixedMenu="true"
+								minHeight="7rem"
+								maxHeight="16rem"
+							/>
+						</div>
+					</div>
+				</div>
+
+				<div class="px-5 pb-5 space-y-5 border-b mb-5">
+					<h2 class="text-base-semibold text-ink-gray-9">
+						{{ __('Conferencing') }}
+					</h2>
+					<div class="grid grid-cols-1 md:grid-cols-2 gap-5">
+						<Select
+							v-model="batchDetail.doc.conferencing_provider"
+							:options="conferencingOptions"
+							:label="__('Meeting App')"
+							variant="outline"
+							class="w-full"
+						/>
+					</div>
+				</div>
+
+				<div class="px-5 pb-5 space-y-5">
+					<h2 class="text-base-semibold text-ink-gray-9">
+						{{ __('Meta Tags') }}
+					</h2>
+					<div class="grid grid-cols-1 md:grid-cols-2 gap-5">
+						<FormControl
+							v-model="meta.description"
+							:label="__('Meta Description')"
+							type="textarea"
+							variant="outline"
+						/>
+						<FormControl
+							v-model="meta.keywords"
+							:label="__('Meta Keywords')"
+							type="textarea"
+							:placeholder="__('Comma separated keywords')"
+							variant="outline"
+						/>
+						<Uploader
+							v-model="batchDetail.doc.meta_image"
+							:label="__('Meta Image')"
+							type="image"
+							:required="false"
+						/>
+					</div>
+				</div>
+			</div>
+			<div class="border-s min-w-0">
+				<div class="border-b p-4">
+					<BatchCourses :batch="batch" />
+				</div>
+				<div class="p-4">
+					<Assessments
+						:batch="batch.data?.name"
+						:can-manage="Boolean(batch.data?.can_manage)"
+					/>
+				</div>
+			</div>
+		</div>
+	</div>
+	<NewMemberModal
+		v-model="showMemberModal"
+		:defaultRoles="['batch_evaluator']"
+		@created="onInstructorCreated"
+	/>
+</template>
+<script setup lang="ts">
+import {
+	computed,
+	getCurrentInstance,
+	inject,
+	onMounted,
+	reactive,
+	ref,
+	toRaw,
+	watch,
+	nextTick,
+} from 'vue'
+import {
+	Combobox,
+	FormControl,
+	createDocumentResource,
+	createResource,
+	toast,
+	call,
+} from 'frappe-ui'
+import type { FrappeResourceError } from 'frappe-ui'
+import { reportAutosaveError } from '@/utils/resource'
+import { InputLabel, useInputLabeling } from 'frappe-ui/experimental'
+import { useDebounceFn } from '@vueuse/core'
+import BooleanSwitch from '@/components/Controls/BooleanSwitch.vue'
+import {
+	createLMSCategory,
+	getMetaInfo,
+	openSettings,
+	updateMetaInfo,
+} from '@/utils'
+import { validateBatch } from '@/utils/batchForm'
+import { getDateFormat } from '@/utils/format'
+import {
+	useKeyboardShortcuts,
+	saveShortcut,
+} from '@/composables/useKeyboardShortcuts'
+import { useRoute, useRouter } from 'vue-router'
+import Uploader from '@/components/Controls/Uploader.vue'
+import VideoPreviewField from '@/components/Controls/VideoPreviewField.vue'
+import MultiLink from '@/components/Controls/MultiLink.vue'
+import { summarisePeople } from '@/utils/peopleSummary'
+import Link from '@/components/Controls/Link.vue'
+import Select from '@/components/Controls/Select.vue'
+import BatchCourses from '@/pages/Batches/components/BatchCourses.vue'
+import Assessments from '@/pages/Batches/components/Assessments.vue'
+import NewMemberModal from '@/components/Modals/NewMemberModal.vue'
+import { openBatchForm } from '@/composables/useBatchForms'
+import type { LMSBatch } from '@/types/lms/LMSBatch'
+import type { CourseInstructor } from '@/types/lms/CourseInstructor'
+import type { Resource, BatchDetails, SessionUser } from '@/types'
+import RichTextEditor from '@/components/RichTextEditor.vue'
+
+interface DialogAction {
+	label: string
+	theme?: string
+	variant?: string
+	onClick: (ctx: { close: () => void }) => void
+}
+type DialogFn = (opts: {
+	title: string
+	message: string
+	actions: DialogAction[]
+}) => void
+
+const props = defineProps<{
+	batch: Resource<BatchDetails | null>
+}>()
+
+const router = useRouter()
+const route = useRoute()
+const user = inject<SessionUser>('$user')!
+const instructors = ref<string[]>([])
+const dateFormat = getDateFormat()
+const app = getCurrentInstance()!
+const { $dialog } = app.appContext.config.globalProperties as {
+	$dialog: DialogFn
+}
+const isDirty = ref<boolean>(false)
+const originalDoc = ref<LMSBatch | null>(null)
+const { inputId: batchDetailsId, labelId: batchDetailsLabelId } =
+	useInputLabeling({})
+const showMemberModal = ref<boolean>(false)
+const emailTemplateLinkRef = ref<{ reload: () => void } | null>(null)
+
+const batchDetail = createDocumentResource({
+	doctype: 'LMS Batch',
+	name: props.batch.data?.name,
+	auto: true,
+}) as Resource<LMSBatch | null>
+
+const openEmailTemplateForm = (): void => {
+	openBatchForm(
+		router,
+		'NewBatchEmailTemplate',
+		props.batch.data?.name ?? '',
+		route.hash
+	)
+}
+
+// EmailTemplateForm is a route now, so it cannot emit `created` back at this
+// component the way the modal did — it hands the new name over in the URL
+// instead. Waits on the doc as well as the query because a deep-linked return
+// remounts this form and the doc lands after the query does. The param is
+// stripped once adopted, or a later reload would re-apply it over whatever the
+// user picked since.
+watch(
+	[() => route.query.emailTemplate, () => batchDetail.doc],
+	([created]) => {
+		if (typeof created !== 'string' || !created || !batchDetail.doc) return
+		batchDetail.doc.confirmation_email_template = created
+		emailTemplateLinkRef.value?.reload()
+		const query = { ...route.query }
+		delete query.emailTemplate
+		router.replace({ ...route, query })
+	},
+	{ immediate: true, flush: 'post' }
+)
+
+const updateBatchDetails = (value: string): void => {
+	if (batchDetail.doc) batchDetail.doc.batch_details = value
+}
+
+const createCategory = (name: string, done: () => void): void => {
+	createLMSCategory(name).then((categoryName: string | null) => {
+		if (!categoryName) return
+		if (batchDetail.doc) batchDetail.doc.category = categoryName
+		done()
+	})
+}
+
+const onInstructorCreated = (createdUser: { name: string }): void => {
+	instructors.value = [...instructors.value, createdUser.name]
+}
+
+const meta = reactive<{ description: string; keywords: string }>({
+	description: '',
+	keywords: '',
+})
+
+const validateForm = (): string | null =>
+	validateBatch({
+		doc: batchDetail.doc ?? null,
+		instructors: instructors.value,
+	})
+
+// Tracks the last validation error surfaced to the user so a repeated autosave
+// attempt with the same unmet requirement doesn't re-toast on every keystroke.
+let lastAutoSaveError: string | null = null
+
+// Debounced so a burst of edits collapses into a single save shortly after the
+// user pauses (mirrors CourseForm). When a mandatory field is empty or the
+// amount is invalid, the autosave can't succeed. Surface the reason once and
+// keep the "Not Saved" badge (isDirty stays true) so the change isn't lost.
+const autoSave = useDebounceFn((): void => {
+	if (!isDirty.value) return
+	const error = validateForm()
+	if (error) {
+		if (error !== lastAutoSaveError) {
+			toast.error(error)
+			lastAutoSaveError = error
+		}
+		return
+	}
+	lastAutoSaveError = null
+	updateBatch({ silent: true })
+}, 1000)
+
+onMounted(() => {
+	if (!user.data) window.location.href = '/login'
+})
+
+useKeyboardShortcuts({ shortcuts: [saveShortcut(() => submitBatch())] })
+
+watch(
+	() => batchDetail.doc,
+	() => {
+		if (!batchDetail.doc) return
+
+		if (originalDoc.value) {
+			isDirty.value =
+				JSON.stringify(batchDetail.doc) !== JSON.stringify(originalDoc.value)
+			if (isDirty.value) autoSave()
+		}
+
+		updateBatchData()
+		getMetaInfo('batches', batchDetail.doc?.name, meta)
+	},
+	{ deep: true }
+)
+
+const updateBatchData = (): void => {
+	const doc = batchDetail.doc
+	if (!doc) return
+	Object.keys(doc).forEach((key) => {
+		if (key == 'instructors') {
+			instructors.value = []
+			doc.instructors?.forEach((instructor: CourseInstructor) => {
+				if (instructor.instructor) instructors.value.push(instructor.instructor)
+			})
+		} else if (key === 'start_time' || key === 'end_time') {
+			doc[key] = formatTime(doc[key])
+		}
+	})
+	const checkboxes: (keyof LMSBatch)[] = [
+		'published',
+		'paid_batch',
+		'allow_self_enrollment',
+		'certification',
+		'evaluation',
+	]
+	for (const key of checkboxes) {
+		;(doc as Record<string, unknown>)[key] = doc[key] ? true : false
+	}
+	originalDoc.value = structuredClone(toRaw(doc))
+}
+
+const formatTime = (timeStr: string): string => {
+	const [hours, minutes] = timeStr.split(':')
+	const paddedHours = hours.length == 1 ? '0' + hours : hours
+	return `${paddedHours}:${minutes}`
+}
+
+const submitBatch = (): void => {
+	const error = validateForm()
+	if (error) {
+		toast.error(error)
+		lastAutoSaveError = error
+		return
+	}
+	lastAutoSaveError = null
+	updateBatch()
+}
+
+const updateBatch = (opts: { silent?: boolean } = {}): void => {
+	if (!batchDetail.doc) return
+	batchDetail.setValue.submit(
+		{
+			...batchDetail.doc,
+			instructors: instructors.value.map((instructor) => ({
+				instructor: instructor,
+			})),
+		},
+		{
+			onSuccess(data: LMSBatch) {
+				updateMetaInfo('batches', data.name, meta)
+				if (!opts.silent) toast.success(__('Batch updated successfully'))
+				nextTick(() => {
+					originalDoc.value = structuredClone(data)
+					isDirty.value = false
+				})
+				// Refresh the shared batch resource so the Overview tab (which reads
+				// title/description/batch_details from this same resource) reflects
+				// the saved changes without a page reload (mirrors CourseForm).
+				props.batch.reload()
+			},
+			onError(err: FrappeResourceError) {
+				reportAutosaveError(err, opts.silent)
+			},
+		}
+	)
+}
+
+const deleteBatch = (): void => {
+	$dialog({
+		title: __('Confirm your action to delete'),
+		message: __(
+			'Deleting this batch will also delete all its data including enrolled students, linked courses, assessments, feedback and discussions. Are you sure you want to continue?'
+		),
+		actions: [
+			{
+				label: __('Delete'),
+				theme: 'red',
+				variant: 'solid',
+				onClick({ close }) {
+					trashBatch(close)
+					close()
+				},
+			},
+		],
+	})
+}
+
+const trashBatch = (close: () => void): void => {
+	call('lms.lms.api.delete_batch', {
+		batch: props.batch.data?.name,
+	}).then(() => {
+		toast.success(__('Batch deleted successfully'))
+		close()
+		router.push({
+			name: 'Batches',
+		})
+	})
+}
+
+// The meeting app the site schedules classes on; the site's connected app is
+// configured once in settings, not per batch.
+const conferencingOptions = computed(() => {
+	return [
+		{
+			label: '',
+			value: '',
+		},
+		{
+			label: __('Site meeting app'),
+			value: 'meetapp',
+		},
+	]
+})
+
+const timezoneResource = createResource({
+	url: 'frappe.geo.country_info.get_country_timezone_info',
+	auto: true,
+	transform: (data: { all_timezones: string[] }) => data.all_timezones,
+}) as Resource<string[]>
+
+const timezoneOptions = computed(() =>
+	(timezoneResource.data || []).map((tz: string) => ({ label: tz, value: tz }))
+)
+
+const systemTimezone = ref<string | null>(null)
+
+createResource({
+	url: 'lms.lms.api.get_system_preferences',
+	auto: true,
+	onSuccess: (data: { time_zone: string }) => {
+		systemTimezone.value = data.time_zone
+	},
+})
+
+// A new batch opens on the site's own timezone rather than an empty picker.
+// Sampling batchDetail.doc once inside that onSuccess dropped the default
+// whenever the preferences answered before the full document fetch, the common case.
+watch(
+	[() => batchDetail.doc, systemTimezone],
+	([doc, zone]) => {
+		if (doc && zone && !doc.timezone) doc.timezone = zone
+	},
+	{ immediate: true }
+)
+
+const mediumOptions = computed(() => {
+	return [
+		{
+			label: __('Online'),
+			value: 'Online',
+		},
+		{
+			label: __('Offline'),
+			value: 'Offline',
+		},
+	]
+})
+
+defineExpose({
+	submitBatch,
+	deleteBatch,
+	isDirty,
+})
+</script>

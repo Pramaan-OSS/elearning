@@ -1,0 +1,488 @@
+# Copyright (c) 2026, FOSS United and Contributors
+# See license.txt
+
+import threading
+from unittest.mock import patch
+
+import frappe
+
+from lms.lms.doctype.lms_payment.lms_payment import (
+	UNIQUE_PAYMENT_ID,
+	add_unique_payment_id_constraint,
+)
+from lms.lms.payments import get_payment_link
+from lms.lms.test_helpers import BaseTestUtils
+from lms.lms.utils import complete_enrollment, mark_checkout_paid, update_coupon_redemption
+
+# A worker that never reaches the barrier must not hang the whole suite.
+THREAD_TIMEOUT = 30
+
+BILLING_ADDRESS = {
+	"billing_name": "Coupon Tester",
+	"address_line1": "1 Test Street",
+	"city": "Mumbai",
+	"country": "India",
+	"source": "Website",
+	"member_consent": 1,
+}
+
+
+def _delete_committed(doctype, name):
+	"""Delete without the Deleted Document copy and the timeline comment, which a
+	committed fixture would otherwise leave on the site."""
+	in_import = frappe.flags.in_import
+	frappe.flags.in_import = True
+	try:
+		frappe.delete_doc(doctype, name, force=True, ignore_permissions=True, delete_permanently=True)
+	finally:
+		frappe.flags.in_import = in_import
+
+
+def _delete_committed_user(user):
+	"""What deleting a User leaves behind: its own Notification Settings delete is
+	not permanent, and its defaults, share comment and role audit trail stay."""
+	_delete_committed("Notification Settings", user)
+	_delete_committed("User", user)
+	frappe.db.delete("DefaultValue", {"parent": user})
+	frappe.db.delete("Comment", {"reference_doctype": "User", "reference_name": user})
+	frappe.db.delete("Permission Log", {"for_doctype": "User", "for_document": user})
+
+
+class _CouponRedemptionFixtures:
+	"""Shared fixture helpers for both coupon-redemption test classes below.
+	Not a TestCase itself: mixed into one savepoint-isolated class and one
+	commit-based one, so it must not assume either isolation strategy."""
+
+	def _new_course_fixture(self):
+		hash = frappe.generate_hash(length=6)
+		self.instructor = self._create_user(
+			f"cinstr-{hash}@example.com", "Ida", "Instr", ["Course Creator", "Moderator"]
+		)
+		self.course = self._new_course_for_instructor(self.instructor)
+		self.extra_courses = []
+		self._committed_items = []
+
+	def _new_course_for_instructor(self, instructor):
+		course = self._create_course(
+			title=f"Coupon Redemption Course {frappe.generate_hash(length=6)}", instructor=instructor.email
+		)
+		course.db_set({"paid_course": 1, "course_price": 1000, "currency": "INR"})
+		return course
+
+	def _delete_course_records(self):
+		"""Some tests commit, so the framework's rollback cannot undo them.
+		Not itself the final commit: _commit_cleanup commits once at the end,
+		after this and everything that follows it."""
+		courses = [self.course.name] + [course.name for course in self.extra_courses]
+		for doctype, field in (("LMS Enrollment", "course"), ("LMS Payment", "payment_for_document")):
+			for name in frappe.get_all(doctype, {field: ("in", courses)}, pluck="name"):
+				_delete_committed(doctype, name)
+
+	def _create_coupon(self, redemption_count=0, usage_limit=None, percentage_discount=10):
+		coupon = frappe.new_doc("LMS Coupon")
+		coupon.update(
+			{
+				"code": f"RACE{frappe.generate_hash(length=8)}",
+				"discount_type": "Percentage",
+				"percentage_discount": percentage_discount,
+				"usage_limit": usage_limit,
+				"enabled": 1,
+				"applicable_items": [{"reference_doctype": "LMS Course", "reference_name": self.course.name}],
+			}
+		)
+		coupon.save(ignore_permissions=True)
+		self._committed_items.append(("LMS Coupon", coupon.name))
+
+		if redemption_count:
+			frappe.db.set_value("LMS Coupon", coupon.name, "redemption_count", redemption_count)
+
+		return coupon
+
+	def _create_address(self):
+		address = frappe.new_doc("Address")
+		address.update(
+			{
+				"address_title": f"Coupon Tester {frappe.generate_hash(length=8)}",
+				"address_type": "Billing",
+				"address_line1": "1 Test Street",
+				"city": "Mumbai",
+				"country": "India",
+				"email_id": frappe.session.user,
+			}
+		)
+		address.save(ignore_permissions=True)
+		self._committed_items.append(("Address", address.name))
+		return address
+
+	def _create_source(self):
+		if not frappe.db.exists("LMS Source", "Website"):
+			frappe.get_doc({"doctype": "LMS Source", "source": "Website"}).insert(ignore_permissions=True)
+		return "Website"
+
+	def _create_payment(self, coupon=None, amount=1000, payment_for_certificate=0, course=None):
+		payment = frappe.new_doc("LMS Payment")
+		payment.update(
+			{
+				"member": frappe.session.user,
+				"billing_name": "Coupon Tester",
+				"address": self._create_address().name,
+				"source": self._create_source(),
+				"amount": amount,
+				"currency": "INR",
+				"payment_for_document_type": "LMS Course",
+				"payment_for_document": course or self.course.name,
+				"payment_for_certificate": payment_for_certificate,
+				"coupon": coupon.name if coupon else None,
+			}
+		)
+		payment.save(ignore_permissions=True)
+		self._committed_items.append(("LMS Payment", payment.name))
+		return payment
+
+	def _payment_doc(self, payment, coupon, amount=1000):
+		return frappe._dict(coupon=coupon.name if coupon else None, name=payment.name, amount=amount)
+
+	def _count(self, coupon):
+		return frappe.db.get_value("LMS Coupon", coupon.name, "redemption_count")
+
+	def _callback(self, payment, payment_ref, course=None):
+		"""What a confirmed checkout does: record the payment, then enroll."""
+		if mark_checkout_paid(payment.name, payment_ref):
+			complete_enrollment(payment.name, "LMS Course", course or self.course.name)
+
+	def _checkout(self, coupon, address=None):
+		return get_payment_link(
+			doctype="LMS Course",
+			docname=self.course.name,
+			address=address or BILLING_ADDRESS,
+			payment_for_certificate=0,
+			coupon_code=coupon.code,
+		)
+
+	def _drop_unique_payment_id(self):
+		# Constant identifier, and the test puts the constraint back.
+		frappe.db.sql_ddl(f"alter table `tabLMS Payment` drop index `{UNIQUE_PAYMENT_ID}`")
+
+	def _is_enrolled(self):
+		return bool(
+			frappe.db.exists("LMS Enrollment", {"member": frappe.session.user, "course": self.course.name})
+		)
+
+	def _create_second_course(self):
+		course = self._new_course_for_instructor(self.instructor)
+		self.extra_courses.append(course)
+		return course
+
+
+class TestCouponRedemption(_CouponRedemptionFixtures, BaseTestUtils):
+	"""Everything here runs and rolls back inside BaseTestUtils' per-test
+	savepoint: none of it commits. The threaded tests live in
+	TestCouponRedemptionConcurrency below, which cannot use that savepoint."""
+
+	@classmethod
+	def setUpClass(cls):
+		super().setUpClass()
+		hash = frappe.generate_hash(length=6)
+		cls.instructor = cls._create_user(
+			f"cinstr-{hash}@example.com", "Ida", "Instr", ["Course Creator", "Moderator"]
+		)
+
+	def setUp(self):
+		super().setUp()
+		self.course = self._new_course_for_instructor(self.instructor)
+		self.extra_courses = []
+		self._committed_items = []
+
+	# Counting
+
+	def test_no_coupon_is_a_noop(self):
+		coupon = self._create_coupon()
+		payment = self._create_payment()
+
+		update_coupon_redemption(self._payment_doc(payment, coupon=None))
+
+		self.assertEqual(self._count(coupon), 0)
+
+	def test_separate_payments_each_count(self):
+		coupon = self._create_coupon()
+
+		for _ in range(5):
+			payment = self._create_payment(coupon)
+			update_coupon_redemption(self._payment_doc(payment, coupon))
+
+		self.assertEqual(self._count(coupon), 5)
+
+	def test_redemption_keeps_the_coupon_timestamp_current(self):
+		"""The count is edited from the desk form too, which relies on `modified`
+		to detect that it went stale."""
+		coupon = self._create_coupon()
+		payment = self._create_payment(coupon)
+		modified_before = frappe.db.get_value("LMS Coupon", coupon.name, "modified")
+
+		update_coupon_redemption(self._payment_doc(payment, coupon))
+
+		self.assertNotEqual(frappe.db.get_value("LMS Coupon", coupon.name, "modified"), modified_before)
+
+	# Usage limit
+
+	def test_usage_limit_is_logged_only_once_a_redemption_passes_it(self):
+		# The payment already went through in the paid case, so the redemption
+		# is still recorded (and logged); the other two cases are within limit
+		# / no limit set, so nothing is logged.
+		cases = [
+			("paid_past_limit_is_still_recorded_and_logged", 1, 1, 2, True),
+			("within_limit_is_not_logged", 0, 5, 1, False),
+			("no_limit_set_is_not_logged", 99, 0, 100, False),
+		]
+		for case, redemption_count, usage_limit, expected_count, expect_log in cases:
+			with self.subTest(case=case):
+				coupon = self._create_coupon(redemption_count=redemption_count, usage_limit=usage_limit)
+				payment = self._create_payment(coupon)
+
+				with patch.object(frappe, "log_error") as log_error:
+					update_coupon_redemption(self._payment_doc(payment, coupon))
+
+				self.assertEqual(self._count(coupon), expected_count)
+				if expect_log:
+					log_error.assert_called_once()
+					self.assertIn(coupon.name, str(log_error.call_args))
+				else:
+					log_error.assert_not_called()
+
+	def test_free_redemption_past_the_usage_limit_is_rejected(self):
+		"""Nothing has been paid on a fully discounted order, so the limit can
+		still be enforced instead of merely logged."""
+		coupon = self._create_coupon(redemption_count=1, usage_limit=1)
+		payment = self._create_payment(coupon, amount=0)
+
+		with self.assertRaises(frappe.ValidationError):
+			update_coupon_redemption(self._payment_doc(payment, coupon, amount=0))
+
+		self.assertEqual(self._count(coupon), 1)
+
+	# Gateway callbacks
+
+	def test_gateway_callback_enrolls_and_counts_one_redemption(self):
+		coupon = self._create_coupon()
+		payment = self._create_payment(coupon)
+
+		self._callback(payment, "pay_first")
+
+		self.assertEqual(frappe.db.get_value("LMS Payment", payment.name, "payment_received"), 1)
+		self.assertTrue(self._is_enrolled())
+		self.assertEqual(self._count(coupon), 1)
+
+	def test_replayed_callback_does_not_credit_a_second_payment(self):
+		"""A gateway retry can be resolved against a newer unpaid checkout. That
+		payment must not be marked received, and the coupon must not be counted
+		twice for money that arrived once."""
+		coupon = self._create_coupon()
+		paid = self._create_payment(coupon)
+		self._callback(paid, "pay_first")
+
+		open_checkout = self._create_payment(coupon)
+		self._callback(open_checkout, "pay_first")
+
+		self.assertEqual(frappe.db.get_value("LMS Payment", open_checkout.name, "payment_received"), 0)
+		self.assertEqual(self._count(coupon), 1)
+
+	def test_missing_payment_record_fails_with_a_readable_error(self):
+		with patch.object(frappe, "log_error"), self.assertRaises(frappe.ValidationError) as caught:
+			complete_enrollment("LMS-PAY-does-not-exist", "LMS Course", self.course.name)
+
+		self.assertIn("payment record", str(caught.exception))
+
+	def test_certificate_purchase_enrolls_a_learner_who_is_not_enrolled(self):
+		"""The purchase is recorded on the enrollment, so without one the learner
+		pays and gets nothing, and never stops paying, because the checkout
+		guard reads the same flag."""
+		coupon = self._create_coupon()
+		payment = self._create_payment(coupon, payment_for_certificate=1)
+
+		complete_enrollment(payment.name, "LMS Course", self.course.name)
+
+		enrollment = frappe.db.get_value(
+			"LMS Enrollment",
+			{"member": frappe.session.user, "course": self.course.name},
+			["name", "purchased_certificate"],
+			as_dict=True,
+		)
+		self.assertIsNotNone(enrollment)
+		self.assertEqual(enrollment.purchased_certificate, 1)
+
+	# Checkout
+
+	def test_fully_discounted_checkout_enrolls_and_counts_one_redemption(self):
+		coupon = self._create_coupon(percentage_discount=100)
+
+		self._checkout(coupon)
+
+		self.assertTrue(self._is_enrolled())
+		self.assertEqual(self._count(coupon), 1)
+
+	def test_repeat_free_checkout_does_not_burn_another_redemption(self):
+		"""Nothing stops a learner calling checkout again on a course they are
+		already enrolled in; it must not eat into the coupon's usage limit."""
+		coupon = self._create_coupon(percentage_discount=100)
+		self._checkout(coupon)
+
+		for _ in range(3):
+			self._checkout(coupon)
+
+		self.assertEqual(self._count(coupon), 1)
+		self.assertEqual(frappe.db.count("LMS Payment", {"coupon": coupon.name}), 1)
+
+	def test_repeat_paid_checkout_does_not_create_a_second_payment(self):
+		"""A stale tab or the back button must not charge a learner again for a
+		course they already have."""
+		coupon = self._create_coupon()
+		payment = self._create_payment(coupon)
+		self._callback(payment, "pay_first")
+
+		self._checkout(coupon)
+
+		self.assertEqual(frappe.db.count("LMS Payment", {"payment_for_document": self.course.name}), 1)
+		self.assertEqual(self._count(coupon), 1)
+
+	def test_repeat_checkout_still_saves_edited_billing_details(self):
+		coupon = self._create_coupon()
+		payment = self._create_payment(coupon)
+		self._callback(payment, "pay_first")
+
+		self._checkout(coupon, address={**BILLING_ADDRESS, "address_line1": "42 New Street"})
+
+		address = frappe.get_last_doc("Address", filters={"email_id": frappe.session.user})
+		self.assertEqual(address.address_line1, "42 New Street")
+
+
+class TestCouponRedemptionConcurrency(_CouponRedemptionFixtures, BaseTestUtils):
+	"""These tests commit from worker threads (see _in_parallel), which would
+	release BaseTestUtils' per-test savepoint out from under it. This class
+	skips the savepoint entirely and cleans up explicitly instead."""
+
+	def setUp(self):
+		# Skip BaseTestUtils.setUp: these tests commit.
+		super(BaseTestUtils, self).setUp()
+		self._new_course_fixture()
+
+	def tearDown(self):
+		# Skip BaseTestUtils.tearDown: there is no savepoint to roll back to.
+		# Every test here already cleans up via _commit_cleanup() in the
+		# _in_parallel() finally block.
+		super(BaseTestUtils, self).tearDown()
+
+	def test_parallel_redemptions_are_not_lost(self):
+		"""Two redemptions committing at the same time must both be counted, on
+		real threads with their own database connections."""
+		workers = 8
+		coupon = self._create_coupon()
+		payments = [self._create_payment(coupon) for _ in range(workers)]
+
+		def redeem(payment):
+			update_coupon_redemption(self._payment_doc(payment, coupon))
+
+		self.assertEqual(self._in_parallel(coupon, redeem, payments), workers)
+
+	def test_parallel_callbacks_for_one_payment_count_once(self):
+		"""Two gateway retries for the same payment can arrive at once. Only one
+		of them may count a redemption."""
+		coupon = self._create_coupon()
+		payment = self._create_payment(coupon)
+
+		def deliver(_):
+			self._callback(payment, "pay_first")
+
+		self.assertEqual(self._in_parallel(coupon, deliver, [payment] * 4), 1)
+
+	def test_parallel_callbacks_for_one_gateway_payment_credit_one_payment(self):
+		"""Retries for one gateway payment can be resolved to different LMS
+		Payment rows, which do not contend with each other. One transaction, one
+		credited payment."""
+		coupon = self._create_coupon()
+		payments = [self._create_payment(coupon) for _ in range(2)]
+
+		def deliver(payment):
+			self._callback(payment, "pay_shared")
+
+		self.assertEqual(self._in_parallel(coupon, deliver, payments), 1)
+
+	def test_parallel_callbacks_are_serialized_without_the_constraint(self):
+		"""A site carrying duplicate payment ids cannot take the constraint, and
+		the two callbacks need not even be for the same course. It must still not
+		credit two payments for one gateway payment."""
+		coupon = self._create_coupon()
+		other_course = self._create_second_course()
+		payments = [
+			self._create_payment(coupon),
+			self._create_payment(coupon, course=other_course.name),
+		]
+		self._drop_unique_payment_id()
+
+		def deliver(payment):
+			self._callback(payment, "pay_shared", course=payment.payment_for_document)
+
+		try:
+			self.assertEqual(self._in_parallel(coupon, deliver, payments), 1)
+		finally:
+			add_unique_payment_id_constraint()
+
+	def _in_parallel(self, coupon, work, items) -> int:
+		"""Run work(item) once per item, each on its own connection, all at the
+		same moment. Returns the resulting redemption count, read before the
+		committed fixtures are cleaned up."""
+		site = frappe.local.site
+		# The workers run on their own connections, so the fixtures have to be
+		# visible outside this test's transaction.
+		frappe.db.commit()  # nosemgrep
+		barrier = threading.Barrier(len(items))
+		errors = []
+
+		def run(item):
+			try:
+				frappe.init(site=site)
+				frappe.connect()
+				try:
+					barrier.wait(timeout=THREAD_TIMEOUT)  # maximise overlap between the workers
+					# Match the request handler: retry a database-only transaction
+					# after a concurrent writer invalidates its snapshot.
+					for attempt in range(5):
+						try:
+							work(item)
+							frappe.db.commit()  # nosemgrep
+							break
+						except frappe.QueryDeadlockError:
+							frappe.db.rollback()
+							if attempt == 4:
+								raise
+				finally:
+					frappe.destroy()
+			except Exception as e:  # surfaced in the assertion below
+				errors.append(e)
+				barrier.abort()  # don't strand the workers still waiting
+
+		threads = [threading.Thread(target=run, args=(item,)) for item in items]
+		try:
+			for thread in threads:
+				thread.start()
+			for thread in threads:
+				thread.join(timeout=THREAD_TIMEOUT)
+				self.assertFalse(thread.is_alive(), "a worker did not finish")
+
+			self.assertEqual(errors, [])
+			return self._count(coupon)
+		finally:
+			self._commit_cleanup()
+
+	def _commit_cleanup(self):
+		"""The fixtures above were committed, so rolling back the test cannot
+		remove them."""
+		self._delete_course_records()
+		for doctype, name in reversed(self._committed_items):
+			if frappe.db.exists(doctype, name):
+				_delete_committed(doctype, name)
+		self._committed_items = []
+		for course in [self.course, *self.extra_courses]:
+			_delete_committed("LMS Course", course.name)
+		self.extra_courses = []
+		_delete_committed_user(self.instructor.name)
+		frappe.db.commit()  # nosemgrep

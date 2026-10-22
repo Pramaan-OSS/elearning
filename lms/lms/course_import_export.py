@@ -1,0 +1,1108 @@
+import json
+import os
+import re
+import secrets
+import shutil
+import tempfile
+import zipfile
+from datetime import date, datetime, timedelta
+
+import frappe
+from frappe import _
+from frappe.utils import escape_html, get_files_path, validate_email_address
+from frappe.utils.file_manager import is_safe_path
+
+from lms.lms.utils import create_user as create_lms_user
+from lms.lms.utils import get_editorjs_blocks, has_moderator_role
+
+# What a course legitimately embeds. Active-document types (.html, .xhtml, .js, .xsl)
+# would be written to /files/ and served inline, which is stored XSS on the LMS origin;
+# SVG is excluded for the same reason it is excluded from quiz answers (script-bearing).
+ALLOWED_ASSET_EXTENSIONS = {
+	".png",
+	".jpg",
+	".jpeg",
+	".gif",
+	".webp",
+	".avif",
+	".bmp",
+	".mp4",
+	".webm",
+	".ogg",
+	".mp3",
+	".wav",
+	".m4a",
+	".pdf",
+}
+MAX_IMPORTED_ASSET_BYTES = 200 * 1024 * 1024
+# Archive root -> is_private, mirroring the URL the content cites. A course can embed
+# /files/x.png and /private/files/x.png at once: two files on the site, one base name.
+ASSET_MEMBER_ROOTS = {"assets/files/": 0, "assets/private/files/": 1}
+
+# Bounds on what an uploaded archive (course import or SCORM package) may expand to.
+# The upload cap only limits the compressed file, and deflate reaches ~1000:1.
+MAX_ARCHIVE_BYTES = 1024 * 1024 * 1024
+MAX_ARCHIVE_MEMBERS = 10_000
+MAX_COMPRESSION_RATIO = 100
+# Small members cannot do harm however well they compress, so the ratio only applies above this.
+MIN_RATIO_CHECK_BYTES = 1024 * 1024
+MAX_ARCHIVE_JSON_BYTES = 10 * 1024 * 1024
+
+
+def export_course_zip(course_name):
+	course = frappe.get_doc("LMS Course", course_name)
+	chapters = get_chapters_for_export(course.chapters)
+	lessons = get_lessons_for_export(course_name)
+	instructors = get_course_instructors(course)
+	evaluator = get_course_evaluator(course)
+	assets = get_course_assets(course, lessons, instructors, evaluator)
+	assessments, questions, test_cases = get_course_assessments(lessons)
+	safe_time = frappe.utils.now_datetime().strftime("%Y%m%d_%H%M%S")
+	zip_filename = f"{course.name}_{safe_time}_{secrets.token_hex(4)}.zip"
+	create_course_zip(
+		zip_filename,
+		course,
+		chapters,
+		lessons,
+		assets,
+		assessments,
+		questions,
+		test_cases,
+		instructors,
+		evaluator,
+	)
+
+
+def get_chapters_for_export(chapters: list):
+	chapters_list = []
+	for row in chapters:
+		chapter = frappe.get_doc("Course Chapter", row.chapter)
+		chapters_list.append(chapter)
+	return chapters_list
+
+
+def get_lessons_for_export(course_name: str):
+	lessons = frappe.get_all("Course Lesson", {"course": course_name}, pluck="name")
+	lessons_list = []
+	for lesson in lessons:
+		lesson_doc = frappe.get_doc("Course Lesson", lesson)
+		lessons_list.append(lesson_doc)
+	return lessons_list
+
+
+def get_assessment_from_block(block):
+	block_type = block.get("type")
+	data_field = "exercise" if block_type == "program" else block_type
+	name = block.get("data", {}).get(data_field)
+	doctype = get_assessment_map().get(block_type)
+	if frappe.db.exists(doctype, name):
+		return frappe.get_doc(doctype, name)
+	return None
+
+
+def get_quiz_questions(doc):
+	questions = []
+	for q in doc.questions:
+		question_doc = frappe.get_doc("LMS Question", q.question)
+		questions.append(question_doc.as_dict())
+	return questions
+
+
+def get_exercise_test_cases(doc):
+	test_cases = []
+	for tc in doc.test_cases:
+		test_case_doc = frappe.get_doc("LMS Test Case", tc.name)
+		test_cases.append(test_case_doc.as_dict())
+	return test_cases
+
+
+def get_assessments_from_lesson(lesson):
+	assessments, questions, test_cases = [], [], []
+	for block in get_editorjs_blocks(lesson.content):
+		if block.get("type") not in ("quiz", "assignment", "program"):
+			continue
+		doc = get_assessment_from_block(block)
+		if not doc:
+			continue
+		assessments.append(doc.as_dict())
+		if doc.doctype == "LMS Quiz":
+			questions.extend(get_quiz_questions(doc))
+		elif doc.doctype == "LMS Programming Exercise":
+			test_cases.extend(get_exercise_test_cases(doc))
+	return assessments, questions, test_cases
+
+
+def get_course_assessments(lessons):
+	assessments, questions, test_cases = [], [], []
+	for lesson in lessons:
+		lesson_assessments, lesson_questions, lesson_test_cases = get_assessments_from_lesson(lesson)
+		assessments.extend(lesson_assessments)
+		questions.extend(lesson_questions)
+		test_cases.extend(lesson_test_cases)
+	return assessments, questions, test_cases
+
+
+def get_course_instructors(course):
+	users = []
+	for instructor in course.instructors:
+		user_info = frappe.db.get_value(
+			"User",
+			instructor.instructor,
+			["name", "full_name", "first_name", "last_name", "email", "user_image"],
+			as_dict=True,
+		)
+		if user_info:
+			users.append(user_info)
+	return users
+
+
+def get_course_evaluator(course):
+	evaluators = []
+	if course.evaluator and frappe.db.exists("Course Evaluator", course.evaluator):
+		evaluator_info = frappe.get_doc("Course Evaluator", course.evaluator)
+		evaluators.append(evaluator_info)
+	return evaluators
+
+
+def get_course_assets(course, lessons, instructors, evaluator):
+	assets = []
+	if course.image:
+		assets.append(course.image)
+	for lesson in lessons:
+		for block in get_editorjs_blocks(lesson.content):
+			if block.get("type") == "upload":
+				url = block.get("data", {}).get("file_url")
+				assets.append(url)
+	for instructor in instructors:
+		if instructor.get("user_image"):
+			assets.append(instructor["user_image"])
+	if len(evaluator):
+		assets.append(evaluator[0].user_image)
+
+	course_documents = get_course_documents(course, lessons)
+	files = (
+		get_exportable_file(url, course_documents) for url in set(assets) if url and isinstance(url, str)
+	)
+	return [file for file in files if file]
+
+
+def get_course_documents(course, lessons):
+	documents = {("LMS Course", course.name)}
+	documents.update(("Course Chapter", row.chapter) for row in course.chapters)
+	documents.update(("Course Lesson", lesson.name) for lesson in lessons)
+	return documents
+
+
+def get_exportable_file(file_url, course_documents):
+	"""The earliest File row whose url matches file_url exactly (the column ignores case), if
+	attached to the course, its chapters or lessons, or readable by the exporter. A later row
+	naming the same url can be one the exporter made, so it never decides."""
+	rows = frappe.get_all(
+		"File",
+		filters={"file_url": file_url, "is_folder": 0},
+		fields=["name", "file_url"],
+		order_by="creation asc",
+	)
+	original = next((row.name for row in rows if row.file_url == file_url), None)
+	if not original:
+		return None
+
+	file_doc = frappe.get_doc("File", original)
+	attached_to = (file_doc.attached_to_doctype, file_doc.attached_to_name)
+	if attached_to in course_documents or frappe.has_permission("File", "read", doc=file_doc):
+		return file_doc
+	return None
+
+
+def get_local_file_path(file_doc):
+	"""The file's path on disk, only if it is inside the site's files folders and
+	file_doc.file_url is its canonical url there (no `//` or `./` aliases)."""
+	if not file_doc.file_url.startswith(("/files/", "/private/files/")):
+		return None
+	try:
+		file_path = os.path.realpath(file_doc.get_full_path())
+	except frappe.ValidationError:
+		frappe.clear_last_message()
+		return None
+
+	for url_prefix, is_private in (("/files/", 0), ("/private/files/", 1)):
+		root = os.path.realpath(get_files_path(is_private=is_private))
+		if os.path.commonpath((root, file_path)) != root or not os.path.isfile(file_path):
+			continue
+		if url_prefix + os.path.relpath(file_path, root) == file_doc.file_url:
+			return file_path
+	return None
+
+
+def create_course_zip(
+	zip_filename,
+	course,
+	chapters,
+	lessons,
+	assets,
+	assessments,
+	questions,
+	test_cases,
+	instructors,
+	evaluator,
+):
+	try:
+		tmp_path = os.path.join(tempfile.gettempdir(), zip_filename)
+		build_course_zip(
+			tmp_path,
+			course,
+			chapters,
+			lessons,
+			assets,
+			assessments,
+			questions,
+			test_cases,
+			instructors,
+			evaluator,
+		)
+		final_path = move_zip_to_private(tmp_path, zip_filename)
+		schedule_file_deletion(final_path, delay_seconds=600)  # 10 minutes
+		serve_zip(final_path, zip_filename)
+	except Exception:
+		frappe.log_error(
+			title="Course export failed", reference_doctype="LMS Course", reference_name=course.name
+		)
+		frappe.throw(
+			_("Could not create the course ZIP file. Please try again later."),
+			title=_("Course export failed"),
+		)
+
+
+def build_course_zip(
+	tmp_path, course, chapters, lessons, assets, assessments, questions, test_cases, instructors, evaluator
+):
+	with zipfile.ZipFile(tmp_path, "w", compression=zipfile.ZIP_DEFLATED) as zip_file:
+		write_course_json(zip_file, course)
+		write_chapters_json(zip_file, chapters)
+		write_lessons_json(zip_file, lessons)
+		write_assessments_json(zip_file, assessments, questions, test_cases)
+		write_assets(zip_file, assets)
+		write_instructors_json(zip_file, instructors)
+		write_evaluator_json(zip_file, evaluator)
+
+
+def write_course_json(zip_file, course):
+	zip_file.writestr("course.json", frappe_json_dumps(course.as_dict()))
+
+
+def write_chapters_json(zip_file, chapters):
+	for chapter in chapters:
+		chapter_data = chapter.as_dict()
+		chapter_json = frappe_json_dumps(chapter_data)
+		safe_name = sanitize_string(chapter.name)
+		zip_file.writestr(f"chapters/{safe_name}.json", chapter_json)
+
+
+def write_lessons_json(zip_file, lessons):
+	for lesson in lessons:
+		lesson_data = lesson.as_dict()
+		lesson_json = frappe_json_dumps(lesson_data)
+		safe_name = sanitize_string(lesson.name)
+		zip_file.writestr(f"lessons/{safe_name}.json", lesson_json)
+
+
+def write_assessments_json(zip_file, assessments, questions, test_cases):
+	for question in questions:
+		question_json = frappe_json_dumps(question)
+		safe_name = sanitize_string(question["name"])
+		zip_file.writestr(f"assessments/questions/{safe_name}.json", question_json)
+
+	for test_case in test_cases:
+		test_case_json = frappe_json_dumps(test_case)
+		safe_name = sanitize_string(test_case["name"])
+		zip_file.writestr(f"assessments/test_cases/{safe_name}.json", test_case_json)
+
+	for assessment in assessments:
+		assessment_json = frappe_json_dumps(assessment)
+		doctype = "_".join(assessment["doctype"].lower().split(" "))
+		safe_name = "_".join(sanitize_string(assessment["name"]).split(" "))
+		zip_file.writestr(f"assessments/{doctype}_{safe_name}.json", assessment_json)
+
+
+def asset_member_path(asset):
+	"""Where the archive stores an asset, under the root that records its privacy.
+	Flattened to one assets/<name>, a same-named public and private file would
+	share one entry and the import could only recreate one of the two URLs."""
+	root = "assets/private/files/" if asset.startswith("/private/") else "assets/files/"
+	return root + sanitize_string(os.path.basename(asset))
+
+
+def write_assets(zip_file, assets):
+	for file_doc in assets:
+		file_path = get_local_file_path(file_doc)
+		if file_path:
+			zip_file.write(file_path, asset_member_path(file_doc.file_url))
+
+
+def move_zip_to_private(tmp_path, zip_filename):
+	final_path = os.path.join(frappe.get_site_path("private", "files"), zip_filename)
+	shutil.move(tmp_path, final_path)
+	return final_path
+
+
+def write_instructors_json(zip_file, instructors):
+	instructors_json = frappe_json_dumps(instructors)
+	zip_file.writestr("instructors.json", instructors_json)
+
+
+def write_evaluator_json(zip_file, evaluator):
+	if not len(evaluator):
+		return
+	evaluator_json = frappe_json_dumps(evaluator[0].as_dict())
+	zip_file.writestr("evaluator.json", evaluator_json)
+
+
+def serve_zip(final_path, zip_filename):
+	if not os.path.exists(final_path) or not os.path.isfile(final_path):
+		frappe.throw(_("File not found"))
+
+	safe_filename = sanitize_string(zip_filename)
+
+	try:
+		with open(final_path, "rb") as f:
+			frappe.local.response.filename = safe_filename
+			frappe.local.response.filecontent = f.read()
+			frappe.local.response.type = "download"
+			frappe.local.response.content_type = "application/zip"
+	except Exception as e:
+		frappe.log_error(f"Error serving ZIP file: {str(e)}")
+		frappe.throw(_("Error downloading file"))
+
+
+def schedule_file_deletion(file_path, delay_seconds=600):
+	frappe.enqueue(
+		delete_file,
+		file_path=file_path,
+		queue="long",
+		timeout=delay_seconds,
+		at_front=False,
+		enqueue_after_commit=True,
+	)
+
+
+def delete_file(file_path):
+	try:
+		if os.path.exists(file_path):
+			os.remove(file_path)
+	except Exception as e:
+		frappe.log_error(f"Error deleting exported file {file_path}: {e}")
+
+
+def frappe_json_dumps(data):
+	def default(obj):
+		try:
+			if isinstance(obj, (datetime | date | timedelta)):
+				return str(obj)
+		except Exception as e:
+			frappe.log_error(f"Error serializing object {obj}: {e}")
+
+	return json.dumps(data, indent=4, default=default)
+
+
+def import_course_zip(zip_file_path):
+	zip_file_path = zip_file_path.lstrip("/")
+	actual_path = frappe.get_site_path(zip_file_path)
+	validate_zip_file(actual_path)
+
+	with zipfile.ZipFile(actual_path, "r") as zip_file:
+		validate_archive(zip_file)
+		course_data = read_json_from_zip(zip_file, "course.json")
+		if not course_data:
+			frappe.throw(_("Invalid course ZIP: Missing course.json"))
+
+		create_assets(zip_file)
+		if is_moderator():
+			create_user_for_instructors(zip_file)
+			create_evaluator(zip_file)
+		course_doc = create_course_doc(course_data)
+		chapter_docs = create_chapter_docs(zip_file, course_doc.name)
+		create_assessment_docs(zip_file)
+		create_lesson_docs(zip_file, course_doc.name, chapter_docs)
+		save_course_structure(zip_file, course_doc, chapter_docs)
+		return course_doc.name
+
+
+def validate_archive(zip_file):
+	"""Refuse an archive that would expand past the limits, judged from its central
+	directory before any member is read. zipfile stops each read at the declared
+	size, so the declared sizes bound what extraction can write."""
+	members = zip_file.infolist()
+	if len(members) > MAX_ARCHIVE_MEMBERS:
+		frappe.throw(_("The archive has more than {0} files").format(MAX_ARCHIVE_MEMBERS))
+
+	if sum(info.file_size for info in members) > MAX_ARCHIVE_BYTES:
+		frappe.throw(_("The archive expands to more than {0} MB").format(MAX_ARCHIVE_BYTES // 1048576))
+
+	for info in members:
+		if info.file_size > max(MIN_RATIO_CHECK_BYTES, MAX_COMPRESSION_RATIO * info.compress_size):
+			frappe.throw(
+				_("{0} in the archive is compressed too heavily to extract safely").format(
+					escape_html(info.filename)
+				)
+			)
+
+
+def read_zip_member(zip_file, name, limit):
+	"""A member's bytes, capped by what is actually read rather than by its header."""
+	with zip_file.open(name) as f:
+		data = f.read(limit + 1)
+	if len(data) > limit:
+		frappe.throw(_("{0} in the archive is too large to import").format(escape_html(name)))
+	return data
+
+
+def read_json_from_zip(zip_file, filename):
+	try:
+		return json.loads(read_zip_member(zip_file, filename, MAX_ARCHIVE_JSON_BYTES))
+	except frappe.ValidationError:
+		raise
+	except KeyError:
+		# No such member: optional ones like instructors.json may be absent.
+		return None
+	except Exception as e:
+		frappe.log_error(f"Error reading {filename} from ZIP: {e}")
+		return None
+
+
+def is_moderator():
+	"""Only a Moderator's archive may create users or a Course Evaluator, which grants
+	Batch Evaluator. Every other importer maps the archive onto users that already exist."""
+	return "Moderator" in frappe.get_roles()
+
+
+def record_exists(doctype, name):
+	return isinstance(name, str) and bool(name) and bool(frappe.db.exists(doctype, name))
+
+
+def create_user_for_instructors(zip_file):
+	instructors = read_json_from_zip(zip_file, "instructors.json")
+	if not instructors:
+		return
+	for instructor in instructors:
+		if not frappe.db.exists("User", instructor["email"]):
+			create_user(instructor)
+
+
+def sanitize_string(
+	value,
+	allow_spaces=True,
+	max_length=None,
+	replacement_char=None,
+	escape_html_content=True,
+	strip_whitespace=True,
+):
+	"""
+	Unified function to sanitize strings for various use cases.
+
+	Args:
+		value: String to sanitize
+		allow_spaces: Whether to allow spaces in the output (True for names, False for filenames)
+		max_length: Maximum length to truncate to (None for no limit)
+		replacement_char: Character to replace invalid chars with (None to remove them)
+		escape_html_content: Whether to escape HTML entities
+		strip_whitespace: Whether to strip leading/trailing whitespace
+
+	Returns:
+		Sanitized string
+	"""
+	if not value:
+		return value
+
+	if strip_whitespace:
+		value = value.strip()
+	if max_length:
+		value = value[:max_length]
+
+	if escape_html_content:
+		value = escape_html(value)
+
+	if allow_spaces:
+		invalid_pattern = r"[^a-zA-Z0-9\s\-\.]"
+		valid_pattern = r"^[a-zA-Z0-9\s\-\.]+$"
+	else:
+		invalid_pattern = r"[^a-zA-Z0-9_\-\.]"
+		valid_pattern = r"^[a-zA-Z0-9_\-\.]+$"
+
+	if replacement_char is None:
+		if not re.match(valid_pattern, value):
+			value = re.sub(invalid_pattern, "", value)
+	else:
+		value = re.sub(invalid_pattern, replacement_char, value)
+
+	return value
+
+
+def validate_user_email(user):
+	if not user.get("email") or not validate_email_address(user["email"]):
+		frappe.throw(f"Invalid email for user creation: {user.get('email')}")
+
+
+def get_user_names(user):
+	first_name = sanitize_string(user.get("first_name", ""), max_length=50)
+	last_name = sanitize_string(user.get("last_name", ""), max_length=50)
+	full_name = sanitize_string(user.get("full_name", ""), max_length=100)
+	parts = full_name.split() if full_name else []
+	return (
+		first_name or (parts[0] if parts else "Imported"),
+		last_name or (" ".join(parts[1:]) if len(parts) > 1 else None),
+		full_name,
+	)
+
+
+def create_user(user):
+	frappe.only_for("Moderator", message=True)
+	first_name, last_name, full_name = get_user_names(user)
+	# nosemgrep: lms-unjustified-ignore-permissions - Moderator has no create on User; only_for above gates this
+	user_doc = create_lms_user(
+		email=user["email"],
+		first_name=first_name,
+		last_name=last_name,
+		full_name=full_name,
+		user_image=user.get("user_image"),
+		roles=["Course Creator"],
+		ignore_permissions=True,
+	)
+	return user_doc
+
+
+def create_evaluator(zip_file):
+	evaluator_data = read_json_from_zip(zip_file, "evaluator.json")
+	if not evaluator_data:
+		return
+
+	if not evaluator_data.get("evaluator") or not validate_email_address(evaluator_data.get("evaluator", "")):
+		frappe.log_error(f"Invalid evaluator data: {evaluator_data}")
+		return
+
+	if not frappe.db.exists("User", evaluator_data["evaluator"]):
+		evaluator_data["email"] = evaluator_data["evaluator"]
+		create_user(evaluator_data)
+
+	if frappe.db.exists("Course Evaluator", evaluator_data["name"]):
+		return
+
+	evaluator_doc = frappe.new_doc("Course Evaluator")
+	evaluator_doc.update(evaluator_data)
+	evaluator_doc.insert(ignore_if_duplicate=True)
+
+
+def get_course_fields():
+	return [
+		"title",
+		"tags",
+		"image",
+		"video_link",
+		"card_gradient",
+		"short_introduction",
+		"description",
+		"published",
+		"upcoming",
+		"featured",
+		"disable_self_learning",
+		"enforce_lesson_completion",
+		"published_on",
+		"category",
+		"evaluator",
+		"timezone",
+		"paid_course",
+		"paid_certificate",
+		"course_price",
+		"currency",
+		"amount_usd",
+		"enable_certification",
+	]
+
+
+def add_data_to_course(course_doc, course_data):
+	for field in get_course_fields():
+		if field in course_data:
+			course_doc.set(field, course_data[field])
+
+
+def add_instructors_to_course(course_doc, course_data):
+	instructors = [
+		row["instructor"]
+		for row in course_data.get("instructors", [])
+		if record_exists("User", row.get("instructor"))
+	]
+
+	# serve_resource only honours a lesson whose course the FILE'S OWNER authors, and
+	# every imported asset is owned by whoever ran the import -- so without this row
+	# the media is unreachable. Moderators/Administrator author every course already.
+	importer = frappe.session.user
+	if (
+		importer not in instructors
+		and importer not in ("Guest", "Administrator")
+		and not has_moderator_role(importer)
+	):
+		instructors.append(importer)
+
+	for instructor in instructors:
+		course_doc.append("instructors", {"instructor": instructor})
+
+
+def verify_category(category_name):
+	if category_name and not frappe.db.exists("LMS Category", category_name):
+		category = frappe.new_doc("LMS Category")
+		category.category = category_name
+		category.insert(ignore_permissions=True)
+
+
+def create_course_doc(course_data):
+	course_doc = frappe.new_doc("LMS Course")
+	add_instructors_to_course(course_doc, course_data)
+	verify_category(course_data.get("category"))
+	course_data.pop("instructors", None)
+	course_data.pop("chapters", None)
+	if not record_exists("Course Evaluator", course_data.get("evaluator")):
+		course_data.pop("evaluator", None)
+	add_data_to_course(course_doc, course_data)
+	course_doc.insert(ignore_permissions=True)
+	return course_doc
+
+
+def exclude_meta_fields(data):
+	meta_fields = ["name", "owner", "creation", "created_by", "modified", "modified_by", "docstatus"]
+	return {k: v for k, v in data.items() if k not in meta_fields}
+
+
+def create_chapter_docs(zip_file, course_name):
+	chapter_docs = []
+	for file in zip_file.namelist():
+		if file.startswith("chapters/") and file.endswith(".json"):
+			chapter_data = read_json_from_zip(zip_file, file)
+			chapter_data = exclude_meta_fields(chapter_data)
+			if chapter_data:
+				chapter_doc = frappe.new_doc("Course Chapter")
+				chapter_data.pop("lessons", None)
+				drop_scorm_fields(chapter_data)
+				chapter_doc.update(chapter_data)
+				chapter_doc.course = course_name
+				chapter_doc.insert(ignore_permissions=True)
+				chapter_docs.append(chapter_doc)
+	return chapter_docs
+
+
+def drop_scorm_fields(chapter_data):
+	"""The archive holds no SCORM package, only paths into the source site's, so an imported chapter arrives without one."""
+	for field in ("is_scorm_package", "scorm_package", "scorm_package_path", "manifest_file", "launch_file"):
+		chapter_data.pop(field, None)
+
+
+def get_chapter_name_for_lesson(zip_file, lesson_data, chapter_docs):
+	for file in zip_file.namelist():
+		if file.startswith("chapters/") and file.endswith(".json"):
+			chapter_data = read_json_from_zip(zip_file, file)
+			if chapter_data.get("name") == lesson_data.get("chapter"):
+				title = chapter_data.get("title")
+				chapter_doc = next((c for c in chapter_docs if c.title == title), None)
+				if chapter_doc:
+					return chapter_doc.name
+	return None
+
+
+def get_assessment_map():
+	return {"quiz": "LMS Quiz", "assignment": "LMS Assignment", "program": "LMS Programming Exercise"}
+
+
+def get_assessment_title(zip_file, assessment_name, assessment_type):
+	assessment_map = get_assessment_map()
+	doctype = "_".join(assessment_map.get(assessment_type).lower().split(" "))
+	assessment_name = "_".join(assessment_name.split(" "))
+	file_name = f"assessments/{doctype}_{assessment_name}.json"
+	assessment_data = read_json_from_zip(zip_file, file_name)
+	return assessment_data.get("title") if assessment_data else None
+
+
+def replace_assessment_names(zip_file, content):
+	assessment_types = ["quiz", "assignment", "program"]
+	try:
+		content = json.loads(content)
+	except (TypeError, ValueError):
+		return content
+	if not isinstance(content, dict):
+		return json.dumps(content)
+	for block in content.get("blocks") or []:
+		# Raw iteration (this mutates data in place and re-dumps, so it can't go through
+		# get_editorjs_blocks); guard the same shape the helper does.
+		if not isinstance(block, dict) or not isinstance(block.get("data"), dict):
+			continue
+		data = block["data"]
+		if block.get("type") in assessment_types:
+			data_field = "exercise" if block.get("type") == "program" else block.get("type")
+			assessment_name = data.get(data_field)
+			assessment_title = get_assessment_title(zip_file, assessment_name, block.get("type"))
+			doctype = get_assessment_map().get(block.get("type"))
+			current_assessment_name = frappe.db.get_value(doctype, {"title": assessment_title}, "name")
+			if current_assessment_name:
+				data[data_field] = current_assessment_name
+	return json.dumps(content)
+
+
+def replace_assets(content):
+	content = json.loads(content)
+	for block in content.get("blocks", []):
+		if block.get("type") == "upload":
+			asset_url = block.get("data", {}).get("file_url")
+			if asset_url:
+				asset_name = asset_url.split("/")[-1]
+				current_asset_url = frappe.db.get_value("LMS Asset", {"file_name": asset_name}, "file_url")
+				if current_asset_url:
+					block["data"]["url"] = current_asset_url
+
+
+def replace_values_in_content(zip_file, content):
+	return replace_assessment_names(zip_file, content)
+	# replace_assets(content)
+
+
+def create_lesson_docs(zip_file, course_name, chapter_docs):
+	lesson_docs = []
+	for file in zip_file.namelist():
+		if file.startswith("lessons/") and file.endswith(".json"):
+			lesson_data = read_json_from_zip(zip_file, file)
+			lesson_data = exclude_meta_fields(lesson_data)
+			if lesson_data:
+				lesson_doc = frappe.new_doc("Course Lesson")
+				lesson_doc.update(lesson_data)
+				lesson_doc.course = course_name
+				lesson_doc.chapter = get_chapter_name_for_lesson(zip_file, lesson_data, chapter_docs)
+				lesson_doc.content = (
+					replace_values_in_content(zip_file, lesson_doc.content) if lesson_doc.content else None
+				)
+				lesson_doc.insert(ignore_permissions=True)
+				lesson_docs.append(lesson_doc)
+	return lesson_docs
+
+
+def drop_source_site_authors(data):
+	"""An imported row answers to whoever imported it, not to the site it came from.
+
+	`authors` names Users, and the export serialises those child rows. Carried
+	across, the Link either does not resolve here -- LinkValidationError out of
+	insert(), so no part of the course arrives -- or resolves to an unrelated
+	account that happens to share the email, handing it write on content it never
+	made while the importer who owns the row cannot edit it. Dropped, the
+	AuthoredDocument seed names the importer, the same as for any other new row.
+	"""
+	data.pop("authors", None)
+
+
+def create_question_doc(zip_file, file):
+	question_data = read_json_from_zip(zip_file, file)
+	if question_data:
+		drop_source_site_authors(question_data)
+		doc = frappe.new_doc("LMS Question")
+		doc.update(question_data)
+		doc.insert(ignore_permissions=True)
+
+
+def add_questions_to_quiz(quiz_doc, questions):
+	for question in questions:
+		question_detail = question["question_detail"]
+		question_name = frappe.db.get_value("LMS Question", {"question": question_detail}, "name")
+		if question_name:
+			quiz_doc.append("questions", {"question": question_name})
+
+
+def create_supporting_docs(zip_file):
+	for file in zip_file.namelist():
+		if file.startswith("assessments/questions/") and file.endswith(".json"):
+			create_question_doc(zip_file, file)
+
+
+def is_assessment_file(file):
+	return (
+		file.startswith("assessments/")
+		and file.endswith(".json")
+		and not file.startswith("assessments/questions/")
+		and not file.startswith("assessments/test_cases/")
+	)
+
+
+def build_assessment_doc(assessment_data):
+	doctype = assessment_data.get("doctype")
+	if doctype not in ("LMS Quiz", "LMS Assignment", "LMS Programming Exercise"):
+		return
+	if frappe.db.exists(doctype, assessment_data.get("name")):
+		return
+
+	questions = assessment_data.pop("questions", [])
+	test_cases = assessment_data.pop("test_cases", [])
+	drop_source_site_authors(assessment_data)
+	doc = frappe.new_doc(doctype)
+	doc.update(assessment_data)
+
+	if doctype == "LMS Quiz":
+		add_questions_to_quiz(doc, questions)
+	elif doctype == "LMS Programming Exercise":
+		for row in test_cases:
+			doc.append(
+				"test_cases",
+				{
+					"input": row["input"],
+					"expected_output": row["expected_output"],
+					"hidden": row.get("hidden", 0),
+				},
+			)
+
+	doc.insert(ignore_permissions=True)
+
+
+def create_main_assessment_docs(zip_file):
+	for file in zip_file.namelist():
+		if not is_assessment_file(file):
+			continue
+		assessment_data = read_json_from_zip(zip_file, file)
+		if not assessment_data:
+			continue
+		assessment_data.pop("lesson", None)
+		assessment_data.pop("course", None)
+		build_assessment_doc(assessment_data)
+
+
+def create_assessment_docs(zip_file):
+	create_supporting_docs(zip_file)
+	create_main_assessment_docs(zip_file)
+
+
+def base_name(path):
+	return path.split("/")[-1]
+
+
+def asset_file_url(asset_name, is_private):
+	"""Where frappe will serve this asset, which is the URL the content cites."""
+	# frappe applies the same rewrite in save_file_on_filesystem. Not imported from
+	# there, because get_safe_file_name only exists on develop and this backports.
+	safe_name = re.sub(r"[/\\%?#]", "_", asset_name)
+	return ("/private/files/" if is_private else "/files/") + safe_name
+
+
+def existing_asset_urls(file_urls):
+	"""Which of these URLs the site already serves, in one locking query.
+
+	Locking because the answer decides whether to insert, and under REPEATABLE READ
+	a plain read cannot see a row a concurrent import has already committed.
+	`file_url` is indexed; `file_name` is not, and would lock every row scanned.
+	Query builder rather than get_all, which would scope File by the caller's own
+	read permission and report a taken URL as free.
+	"""
+	if not file_urls:
+		return set()
+
+	File = frappe.qb.DocType("File")
+	query = (
+		frappe.qb.from_(File).select(File.file_url).where(File.file_url.isin(list(file_urls))).for_update()
+	)
+	return set(query.run(pluck=True))
+
+
+def create_asset_doc(asset_name, content, is_private, existing):
+	"""Create the File the content cites, unless the site already serves that URL."""
+	file_url = asset_file_url(asset_name, is_private)
+	if file_url in existing:
+		return
+	asset_doc = frappe.new_doc("File")
+	asset_doc.file_name = asset_name
+	asset_doc.content = content
+	# Explicit: File.set_is_private infers only from file_url, which this row has
+	# not got yet, so an unset flag silently means public.
+	asset_doc.is_private = is_private
+	asset_doc.insert()
+
+
+def is_safe_zip_member(name: str) -> bool:
+	"""Whether an archive member name is safe to reduce to a file name.
+
+	`is_safe_path` cannot answer this -- it resolves against the process working
+	directory, the bench's `sites/`, so every member name it was handed came back
+	False and no imported asset was ever created.
+	"""
+	if not name or name.startswith("/") or "\\" in name:
+		return False
+	*directories, basename = name.split("/")
+	if any(part in ("", ".", "..") for part in directories):
+		return False
+	return basename not in ("", ".", "..")
+
+
+def get_referenced_asset_urls(zip_file):
+	"""Every asset URL the archive's own JSON points at."""
+	yield (read_json_from_zip(zip_file, "course.json") or {}).get("image")
+	for instructor in read_json_from_zip(zip_file, "instructors.json") or []:
+		yield instructor.get("user_image")
+	for member in zip_file.namelist():
+		if not member.startswith("lessons/") or not member.endswith(".json"):
+			continue
+		lesson = read_json_from_zip(zip_file, member) or {}
+		for block in get_editorjs_blocks(lesson.get("content")):
+			if block.get("type") == "upload":
+				yield block.get("data", {}).get("file_url")
+
+
+def get_asset_citations(zip_file):
+	"""What the content says about its assets, in one pass over the archive's JSON:
+	file name -> is_private, and the exact assets/<root>/<name> paths the citations
+	expect. The names are the fallback for a flat, pre-ASSET_MEMBER_ROOTS archive and
+	the tiebreaker when a name's own root is unconfirmed; anything uncited is private.
+	"""
+	privacy, member_paths = {}, set()
+	for url in get_referenced_asset_urls(zip_file):
+		if not isinstance(url, str) or not url:
+			continue
+		# Private wins a name collision. Such an archive cannot say which of the two
+		# same-named files its one entry holds, so it must not be published.
+		name = base_name(url)
+		privacy[name] = privacy.get(name, 0) or int(url.startswith("/private/"))
+		member_paths.add(asset_member_path(url))
+	return privacy, member_paths
+
+
+def member_asset_privacy(member):
+	"""The privacy the archive path records, or None when the path records none."""
+	for root, is_private in ASSET_MEMBER_ROOTS.items():
+		if member.startswith(root):
+			return is_private
+	return None
+
+
+def asset_is_private(privacy, member, referenced_paths):
+	"""Trusts the archive path only when a citation expects the asset there;
+	otherwise the citing URL wins, private by default -- except a private root,
+	which a same-named public citation can never publish."""
+	recorded = member_asset_privacy(member)
+	if recorded is not None and member in referenced_paths:
+		return recorded
+	if recorded == 1:
+		return 1
+	return privacy.get(base_name(member), 1)
+
+
+def process_asset_file(zip_file, file, is_private, existing):
+	if not is_safe_zip_member(file):
+		return
+	asset_name = base_name(file)
+	content = read_zip_member(zip_file, file, MAX_IMPORTED_ASSET_BYTES)
+	create_asset_doc(asset_name, content, is_private, existing)
+
+
+def validate_assets(members):
+	"""Bound what an uploaded archive may write, and to what.
+
+	Central-directory sizes only, so a compressible archive is turned away unread.
+	"""
+	for info in members:
+		if os.path.splitext(info.filename)[1].lower() not in ALLOWED_ASSET_EXTENSIONS:
+			frappe.throw(
+				_("Course asset {0} is not a supported image, video, audio or PDF file.").format(
+					escape_html(base_name(info.filename))
+				)
+			)
+
+	if sum(info.file_size for info in members) > MAX_IMPORTED_ASSET_BYTES:
+		frappe.throw(
+			_("The course's assets exceed the maximum import size of {0} MB").format(
+				MAX_IMPORTED_ASSET_BYTES // 1048576
+			)
+		)
+
+
+def asset_member_priority(member, referenced_paths):
+	"""Lower wins a destination URL collision: a member a citation confirms at its
+	own path, then any rooted member, then a flat/legacy one -- never whichever
+	the zip happened to list first."""
+	if member in referenced_paths:
+		return 0
+	if member_asset_privacy(member) is not None:
+		return 1
+	return 2
+
+
+def asset_members(zip_file, privacy, referenced_paths):
+	"""(member, is_private) pairs to create, one per destination URL. Two members
+	can resolve to the same URL (assets/x.png, assets/files/x.png); the
+	higher-priority one wins it, not whichever the archive lists first."""
+	best = {}
+	for info in zip_file.infolist():
+		if not info.filename.startswith("assets/") or info.is_dir():
+			continue
+		if not is_safe_zip_member(info.filename):
+			continue
+		is_private = asset_is_private(privacy, info.filename, referenced_paths)
+		url = asset_file_url(base_name(info.filename), is_private)
+		priority = asset_member_priority(info.filename, referenced_paths)
+		current = best.get(url)
+		if current is None or priority < current[0]:
+			best[url] = (priority, info, is_private)
+	return [(info, is_private) for _, info, is_private in best.values()]
+
+
+def create_assets(zip_file):
+	privacy, referenced_paths = get_asset_citations(zip_file)
+	members = asset_members(zip_file, privacy, referenced_paths)
+	validate_assets([info for info, _ in members])
+	existing = existing_asset_urls(
+		{asset_file_url(base_name(info.filename), is_private) for info, is_private in members}
+	)
+	for info, is_private in members:
+		try:
+			process_asset_file(zip_file, info.filename, is_private, existing)
+		except Exception:
+			# One bad asset must not abort the import. The title stays constant because
+			# the member name is attacker-supplied and Error Log stores it in a Data
+			# field. No with_context, because the locals hold the asset bytes.
+			frappe.log_error(
+				title="Course import: asset skipped",
+				message=f"{info.filename}\n\n{frappe.get_traceback()}",
+			)
+
+
+def get_lesson_title(zip_file, lesson_name):
+	for file in zip_file.namelist():
+		if file.startswith("lessons/") and file.endswith(".json"):
+			lesson_data = read_json_from_zip(zip_file, file)
+			if lesson_data.get("name") == lesson_name:
+				return lesson_data.get("title")
+	return None
+
+
+def add_lessons_to_chapters(zip_file, course_name, chapter_docs):
+	for file in zip_file.namelist():
+		if file.startswith("chapters/") and file.endswith(".json"):
+			chapter_data = read_json_from_zip(zip_file, file)
+			chapter_doc = next((c for c in chapter_docs if c.title == chapter_data.get("title")), None)
+			if not chapter_doc:
+				continue
+			for lesson in chapter_data.get("lessons", []):
+				lesson_title = get_lesson_title(zip_file, lesson["lesson"])
+				lesson_name = frappe.db.get_value(
+					"Course Lesson", {"title": lesson_title, "course": course_name}, "name"
+				)
+				if lesson_name:
+					chapter_doc.append("lessons", {"lesson": lesson_name})
+			chapter_doc.save(ignore_permissions=True)
+
+
+def add_chapter_to_course(course_doc, chapter_docs):
+	course_doc.reload()
+	for chapter_doc in chapter_docs:
+		course_doc.append("chapters", {"chapter": chapter_doc.name})
+	course_doc.save(ignore_permissions=True)
+
+
+def save_course_structure(zip_file, course_doc, chapter_docs):
+	add_chapter_to_course(course_doc, chapter_docs)
+	add_lessons_to_chapters(zip_file, course_doc.name, chapter_docs)
+
+
+def validate_zip_file(zip_file_path):
+	if not os.path.exists(zip_file_path) or not zipfile.is_zipfile(zip_file_path):
+		frappe.throw(_("Invalid ZIP file"))
+
+	if not is_safe_path(zip_file_path):
+		frappe.throw(_("Unsafe file path detected"))

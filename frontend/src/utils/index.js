@@ -1,0 +1,1071 @@
+import { call, toast } from 'frappe-ui'
+import { ASSESSMENT_BLOCK_SELECTOR } from '@/utils/blockMount'
+import { Quiz } from '@/utils/quiz'
+import { Program } from '@/utils/program'
+import { Assignment } from '@/utils/assignment'
+import { Upload } from '@/utils/upload'
+import { Markdown } from '@/utils/markdownParser'
+import { useSettings } from '@/stores/settings'
+import { usersStore } from '@/stores/user'
+import router from '@/router'
+import { pushSettingsHash } from '@/composables/useSettingsHash'
+import { Heading } from '@/utils/heading'
+import Paragraph from '@editorjs/paragraph'
+import { CodeBox } from '@/utils/code'
+import NestedList from '@editorjs/nested-list'
+import InlineCode from '@editorjs/inline-code'
+import { Bold } from '@/utils/inline/Bold'
+import { Underline } from '@/utils/inline/Underline'
+import { Strikethrough } from '@/utils/inline/Strikethrough'
+import { AlignLeft, AlignCenter, AlignRight } from '@/utils/inline/TextAlign'
+import {
+	clipboardTunes,
+	clipboardTuneNames,
+} from '@/utils/blockTunes/clipboardTunes'
+import dayjs from '@/utils/dayjs'
+import Embed from '@editorjs/embed'
+import SimpleImage from '@editorjs/simple-image'
+import Table from '@editorjs/table'
+import DOMPurify from 'dompurify'
+import { decodeEntities } from './inertHtml'
+import { escapeHTML } from '@/utils/format'
+
+const readOnlyMode = window.read_only_mode
+
+// Pure formatting helpers live in a leaf module to avoid a barrel import cycle
+// (index.js -> editor tools -> components -> '@/utils'). Re-exported here so
+// existing '@/utils' consumers keep working; cycle-prone consumers import them
+// from '@/utils/format' directly.
+export {
+	timeAgo,
+	formatSeconds,
+	escapeHTML,
+	formatTimestamp,
+} from '@/utils/format'
+
+export function formatTime(timeString) {
+	if (!timeString) return ''
+	const [hour, minute] = timeString.split(':').map(Number)
+	const dummyDate = new Date(0, 0, 0, hour, minute)
+	const formattedTime = new Intl.DateTimeFormat('en-US', {
+		hour: 'numeric',
+		minute: 'numeric',
+		hour12: true,
+	}).format(dummyDate)
+	return formattedTime
+}
+
+export function formatNumber(number) {
+	return number.toLocaleString('en-IN', {
+		maximumFractionDigits: 0,
+	})
+}
+
+export function formatNumberIntoCurrency(number, currency) {
+	if (number) {
+		return number.toLocaleString('en-IN', {
+			maximumFractionDigits: 0,
+			style: 'currency',
+			currency: currency,
+		})
+	}
+	return ''
+}
+
+// create a function that formats numbers in thousands to k
+
+export function formatAmount(amount) {
+	if (amount > 999) {
+		return (amount / 1000).toFixed(1) + 'k'
+	}
+	return amount
+}
+
+export function formatRating(value) {
+	const n = Number(value)
+	if (!isFinite(n)) return ''
+	return (Math.round(n * 10) / 10).toString()
+}
+
+export function convertToTitleCase(str) {
+	if (!str) {
+		return ''
+	}
+
+	return str
+		.toLowerCase()
+		.split(' ')
+		.map(function (word) {
+			return word.charAt(0).toUpperCase().concat(word.substr(1))
+		})
+		.join(' ')
+}
+export function getFileSize(file_size) {
+	let value = parseInt(file_size)
+	if (value > 1048576) {
+		return (value / 1048576).toFixed(2) + 'M'
+	} else if (value > 1024) {
+		return (value / 1024).toFixed(2) + 'K'
+	}
+	return value
+}
+
+export function getImgDimensions(imgSrc) {
+	return new Promise((resolve) => {
+		let img = new Image()
+		img.onload = function () {
+			let { width, height } = img
+			resolve({ width, height, ratio: width / height })
+		}
+		img.src = imgSrc
+	})
+}
+
+// Visual order of the inline toolbar (automad layout). References registered
+// inline-tool names: EditorJS built-ins (bold/italic/link) + our custom tools.
+const INLINE_TOOLBAR_ORDER = [
+	'alignLeft',
+	'alignCenter',
+	'alignRight',
+	'bold',
+	'italic',
+	'link',
+	'inlineCode',
+	'underline',
+	'strikeThrough',
+]
+
+// The embed tool parses these html strings, so a translated title is escaped
+// before it goes inside an attribute.
+const frameTitle = (label) => `title="${escapeHTML(label)}"`
+
+export function getEditorTools(
+	isInstructorEditor = false,
+	uploadContext = {},
+	{ studentView = false } = {}
+) {
+	return {
+		header: {
+			class: Heading,
+			// Without this key EditorJS leaves tool.inlineTools empty, so the
+			// inline toolbar never opens on a heading and Ctrl+B falls through
+			// to the browser's execCommand (which writes a font-weight span the
+			// sanitizer then strips). Headings take the same toolbar as text.
+			inlineToolbar: INLINE_TOOLBAR_ORDER,
+			config: {
+				placeholder: 'Header',
+			},
+		},
+		list: {
+			class: NestedList,
+			inlineToolbar: INLINE_TOOLBAR_ORDER,
+			config: {
+				defaultStyle: 'ordered',
+			},
+		},
+		upload: {
+			class: Upload,
+			config: uploadContext,
+		},
+		table: {
+			class: Table,
+			inlineToolbar: INLINE_TOOLBAR_ORDER,
+		},
+		quiz: Quiz,
+		// The submission renders in an iframe (a separate app instance), so
+		// provide/inject can't reach it. Pass Student View through the tool
+		// config and on into the iframe URL.
+		assignment: {
+			class: Assignment,
+			config: { studentView },
+		},
+		// Renders its submission in an iframe too, so Student View travels the
+		// same way it does for assignments.
+		program: {
+			class: Program,
+			config: { studentView },
+		},
+		markdown: {
+			class: Markdown,
+			inlineToolbar: INLINE_TOOLBAR_ORDER,
+		},
+		image: SimpleImage,
+		paragraph: {
+			class: Paragraph,
+			inlineToolbar: INLINE_TOOLBAR_ORDER,
+			config: {
+				preserveBlank: true,
+			},
+		},
+		codeBox: {
+			class: CodeBox,
+			config: {
+				useDefaultTheme: 'dark',
+			},
+		},
+		inlineCode: {
+			class: InlineCode,
+			shortcut: 'CMD+SHIFT+M',
+		},
+		// Overrides EditorJS's execCommand-based Bold, which can't bold a
+		// heading (see utils/inline/Bold.ts).
+		bold: {
+			class: Bold,
+		},
+		underline: Underline,
+		strikeThrough: Strikethrough,
+		alignLeft: AlignLeft,
+		alignCenter: AlignCenter,
+		alignRight: AlignRight,
+		copyBlock: clipboardTunes.copyBlock,
+		cutBlock: clipboardTunes.cutBlock,
+		pasteBlock: clipboardTunes.pasteBlock,
+		embed: {
+			class: Embed,
+			inlineToolbar: false,
+			config: {
+				services: {
+					youtube: {
+						regex: /^(?:https?:\/\/)?(?:www\.)?(?:(?:youtu\.be\/)|(?:youtube\.com)\/(?:v\/|u\/\w\/|embed\/|watch))(?:(?:\?v=)?([^#&?=]*))?((?:[?&]\w*=\w*)*)$/,
+						embedUrl: '<%= remote_id %>',
+						/* 'https://www.youtube.com/embed/<%= remote_id %>?origin=https://plyr.io&amp;iv_load_policy=3&amp;modestbranding=1&amp;playsinline=1&amp;showinfo=0&amp;rel=0&amp;enablejsapi=1' */
+						html: `<div class="video-player" data-plyr-provider="youtube"></div>`,
+						id: ([id]) => id,
+					},
+					vimeo: {
+						regex: /^(?:http[s]?:\/\/)?(?:www\.)?vimeo\.com\/(\d+)(?:\/([a-zA-Z0-9]+))?(?:\?[^\s]*)?$/,
+						embedUrl:
+							'https://player.vimeo.com/video/<%= remote_id %>',
+						html: `<div class="video-player" data-plyr-provider="vimeo"></div>`,
+						id: ([id, hash]) => (hash ? `${id}?h=${hash}` : id),
+					},
+					cloudflareStream: {
+						regex: /^https:\/\/customer-[a-z0-9]+\.cloudflarestream\.com\/([a-f0-9]{32})\/watch$/,
+						embedUrl:
+							'https://iframe.videodelivery.net/<%= remote_id %>',
+						html: `<iframe ${frameTitle(
+							__('Cloudflare Stream embed')
+						)} style="width:100%; height: ${
+							window.innerWidth < 640 ? '15rem' : '30rem'
+						};" frameborder="0" allowfullscreen></iframe>`,
+					},
+					bunnyStream: {
+						regex: /^https:\/\/(?:iframe\.mediadelivery\.net|video\.bunnycdn\.com|player\.mediadelivery\.net)\/play\/([a-zA-Z0-9]+\/[a-zA-Z0-9-]+)$/,
+						embedUrl:
+							'https://player.mediadelivery.net/embed/<%= remote_id %>',
+						html: `<iframe ${frameTitle(
+							__('Bunny Stream embed')
+						)} style="width:100%; height: ${
+							window.innerWidth < 640 ? '15rem' : '30rem'
+						};" frameborder="0" allowfullscreen></iframe>`,
+					},
+					codepen: true,
+					aparat: {
+						regex: /^(?:http[s]?:\/\/)?(?:www.)?aparat\.com\/v\/([^\/\?\&]+)\/?$/,
+						embedUrl:
+							'https://www.aparat.com/video/video/embed/videohash/<%= remote_id %>/vt/frame',
+						html: `<iframe ${frameTitle(
+							__('Aparat embed')
+						)} style="margin: 0 auto; width: 100%; height: ${
+							window.innerWidth < 640 ? '15rem' : '30rem'
+						};" frameborder="0" scrolling="no" allowtransparency="true"></iframe>`,
+					},
+					github: true,
+					slides: {
+						regex: /^https:\/\/docs\.google\.com\/presentation\/d\/([A-Za-z0-9_-]+)\/pub$/,
+						embedUrl:
+							'https://docs.google.com/presentation/d/<%= remote_id %>/embed',
+						html: `<iframe ${frameTitle(
+							__('Google Slides embed')
+						)} style='width: 100%; height: ${
+							window.innerWidth < 640 ? '15rem' : '30rem'
+						}; border: 1px solid var(--outline-gray-2); border-radius: 12px; margin: 1rem 0' frameborder='0' allowfullscreen='true'></iframe>`,
+					},
+					drive: {
+						regex: /^https:\/\/drive\.google\.com\/file\/d\/([A-Za-z0-9_-]+)\/view(\?.+)?$/,
+						embedUrl:
+							'https://drive.google.com/file/d/<%= remote_id %>/preview',
+						html: `<iframe ${frameTitle(
+							__('Google Drive embed')
+						)} style='width: 100%; height: ${
+							window.innerWidth < 640 ? '15rem' : '30rem'
+						}; border: 1px solid var(--outline-gray-2); border-radius: 12px;' frameborder='0' allowfullscreen='true'></iframe>`,
+					},
+					docsPublic: {
+						regex: /^https:\/\/docs\.google\.com\/document\/d\/([A-Za-z0-9_-]+)\/edit(\?.+)?$/,
+						embedUrl:
+							'https://docs.google.com/document/d/<%= remote_id %>/preview',
+						html: `<iframe ${frameTitle(
+							__('Google Docs embed')
+						)} style='width: 100%; height: 40rem; border: 1px solid var(--outline-gray-2); border-radius: 12px;' frameborder='0' allowfullscreen='true'></iframe>`,
+					},
+					sheetsPublic: {
+						regex: /^https:\/\/docs\.google\.com\/spreadsheets\/d\/([A-Za-z0-9_-]+)\/edit(\?.+)?$/,
+						embedUrl:
+							'https://docs.google.com/spreadsheets/d/<%= remote_id %>/preview',
+						html: `<iframe ${frameTitle(
+							__('Google Sheets embed')
+						)} style='width: 100%; height: 40rem; border: 1px solid var(--outline-gray-2); border-radius: 12px;' frameborder='0' allowfullscreen='true'></iframe>`,
+					},
+					slidesPublic: {
+						regex: /^https:\/\/docs\.google\.com\/presentation\/d\/([A-Za-z0-9_-]+)\/edit(\?.+)?$/,
+						embedUrl:
+							'https://docs.google.com/presentation/d/<%= remote_id %>/embed',
+						html: `<iframe ${frameTitle(
+							__('Google Slides embed')
+						)} style='width: 100%; height: 30rem; border: 1px solid var(--outline-gray-2); border-radius: 12px; margin: 1rem 0;' frameborder='0' allowfullscreen='true'></iframe>`,
+					},
+					codesandbox: {
+						regex: /^https:\/\/codesandbox\.io\/(?:(?:p\/(?:sandbox|devbox)\/)|(?:embed\/)|(?:s\/))?([A-Za-z0-9_-]+)(?:[\/\?].*)?$/,
+						embedUrl:
+							'https://codesandbox.io/embed/<%= remote_id %>?view=editor+%2B+preview&module=%2Findex.html',
+						html: `<iframe ${frameTitle(
+							__('CodeSandbox embed')
+						)} style='width: 100%; height: 500px; border: 0; border-radius: 4px; overflow: hidden;' sandbox='allow-modals allow-forms allow-popups allow-scripts allow-same-origin' frameborder='0' allowfullscreen='true'></iframe>`,
+					},
+				},
+			},
+		},
+	}
+}
+
+// Block tunes added to every block's settings menu (alongside the native
+// Move up/down + Delete). Pass to EditorJS's global `tunes` config.
+export function getEditorTunes() {
+	return [...clipboardTuneNames]
+}
+
+export function getTimezones() {
+	return [
+		'Pacific/Midway',
+		'Pacific/Pago_Pago',
+		'Pacific/Honolulu',
+		'America/Anchorage',
+		'America/Vancouver',
+		'America/Los_Angeles',
+		'America/Tijuana',
+		'America/Edmonton',
+		'America/Denver',
+		'America/Phoenix',
+		'America/Mazatlan',
+		'America/Winnipeg',
+		'America/Regina',
+		'America/Chicago',
+		'America/Mexico_City',
+		'America/Guatemala',
+		'America/El_Salvador',
+		'America/Managua',
+		'America/Costa_Rica',
+		'America/Montreal',
+		'America/New_York',
+		'America/Indianapolis',
+		'America/Panama',
+		'America/Bogota',
+		'America/Lima',
+		'America/Halifax',
+		'America/Puerto_Rico',
+		'America/Caracas',
+		'America/Santiago',
+		'America/St_Johns',
+		'America/Montevideo',
+		'America/Araguaina',
+		'America/Argentina/Buenos_Aires',
+		'America/Godthab',
+		'America/Sao_Paulo',
+		'Atlantic/Azores',
+		'Canada/Atlantic',
+		'Atlantic/Cape_Verde',
+		'UTC',
+		'Etc/Greenwich',
+		'Europe/Belgrade',
+		'CET',
+		'Atlantic/Reykjavik',
+		'Europe/Dublin',
+		'Europe/London',
+		'Europe/Lisbon',
+		'Africa/Casablanca',
+		'Africa/Nouakchott',
+		'Europe/Oslo',
+		'Europe/Copenhagen',
+		'Europe/Brussels',
+		'Europe/Berlin',
+		'Europe/Helsinki',
+		'Europe/Amsterdam',
+		'Europe/Rome',
+		'Europe/Stockholm',
+		'Europe/Vienna',
+		'Europe/Luxembourg',
+		'Europe/Paris',
+		'Europe/Zurich',
+		'Europe/Madrid',
+		'Africa/Bangui',
+		'Africa/Algiers',
+		'Africa/Tunis',
+		'Africa/Harare',
+		'Africa/Nairobi',
+		'Europe/Warsaw',
+		'Europe/Prague',
+		'Europe/Budapest',
+		'Europe/Sofia',
+		'Europe/Istanbul',
+		'Europe/Athens',
+		'Europe/Bucharest',
+		'Asia/Nicosia',
+		'Asia/Beirut',
+		'Asia/Damascus',
+		'Asia/Jerusalem',
+		'Asia/Amman',
+		'Africa/Tripoli',
+		'Africa/Cairo',
+		'Africa/Johannesburg',
+		'Europe/Moscow',
+		'Asia/Baghdad',
+		'Asia/Kuwait',
+		'Asia/Riyadh',
+		'Asia/Bahrain',
+		'Asia/Qatar',
+		'Asia/Aden',
+		'Asia/Tehran',
+		'Africa/Khartoum',
+		'Africa/Djibouti',
+		'Africa/Mogadishu',
+		'Asia/Dubai',
+		'Asia/Muscat',
+		'Asia/Baku',
+		'Asia/Kabul',
+		'Asia/Yekaterinburg',
+		'Asia/Tashkent',
+		'Asia/Calcutta',
+		'Asia/Kathmandu',
+		'Asia/Novosibirsk',
+		'Asia/Almaty',
+		'Asia/Dacca',
+		'Asia/Krasnoyarsk',
+		'Asia/Dhaka',
+		'Asia/Bangkok',
+		'Asia/Saigon',
+		'Asia/Jakarta',
+		'Asia/Irkutsk',
+		'Asia/Shanghai',
+		'Asia/Hong_Kong',
+		'Asia/Taipei',
+		'Asia/Kuala_Lumpur',
+		'Asia/Singapore',
+		'Australia/Perth',
+		'Asia/Yakutsk',
+		'Asia/Seoul',
+		'Asia/Tokyo',
+		'Australia/Darwin',
+		'Australia/Adelaide',
+		'Asia/Vladivostok',
+		'Pacific/Port_Moresby',
+		'Australia/Brisbane',
+		'Australia/Sydney',
+		'Australia/Hobart',
+		'Asia/Magadan',
+		'SST',
+		'Pacific/Noumea',
+		'Asia/Kamchatka',
+		'Pacific/Fiji',
+		'Pacific/Auckland',
+		'Asia/Kolkata',
+		'Europe/Kiev',
+		'America/Tegucigalpa',
+		'Pacific/Apia',
+	]
+}
+
+export function getUserTimezone() {
+	try {
+		const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone
+		const supportedTimezones = getTimezones()
+
+		if (supportedTimezones.includes(timezone)) {
+			return timezone // e.g., 'Asia/Calcutta', 'America/New_York', etc.
+		} else {
+			throw Error('unsupported timezone')
+		}
+	} catch (error) {
+		console.error('Error getting timezone:', error)
+		return null
+	}
+}
+
+export function getSidebarLinks(forMobile = false) {
+	let links = getSidebarItems(forMobile)
+
+	links.forEach((link) => {
+		link.items = link.items.filter((item) => {
+			return item.condition ? item.condition() : true
+		})
+	})
+
+	links = links.filter((link) => {
+		return link.items.length > 0
+	})
+
+	return links
+}
+
+const getSidebarItems = (forMobile = false) => {
+	const { userResource } = usersStore()
+	const { settings } = useSettings()
+
+	return [
+		{
+			label: 'General',
+			hideLabel: true,
+			items: [
+				{
+					label: 'Home',
+					icon: 'Home',
+					to: 'Home',
+					activeFor: ['Home'],
+					condition: () => {
+						return userResource?.data
+					},
+				},
+				{
+					label: 'Search',
+					icon: 'Search',
+					action: 'commandPalette',
+					shortcut: 'Mod+K',
+					condition: () => {
+						return !forMobile && userResource?.data
+					},
+				},
+				{
+					label: 'Notifications',
+					icon: 'Bell',
+					panel: 'notifications',
+					condition: () => {
+						return !forMobile && userResource?.data
+					},
+				},
+			],
+		},
+		{
+			label: 'Learning',
+			hideLabel: true,
+			items: [
+				{
+					label: 'Courses',
+					icon: 'BookOpen',
+					to: 'Courses',
+					activeFor: ['Courses', 'CourseDetail', 'Lesson'],
+				},
+				{
+					label: 'Programs',
+					icon: 'Route',
+					to: 'Programs',
+					activeFor: ['Programs', 'ProgramDetail'],
+					await: true,
+					condition: () => {
+						return checkIfCanAddProgram(forMobile)
+					},
+				},
+				{
+					label: 'Batches',
+					icon: 'Users',
+					to: 'Batches',
+					activeFor: ['Batches', 'BatchDetail', 'Batch', 'BatchForm'],
+				},
+				{
+					label: 'Certifications',
+					icon: 'GraduationCap',
+					to: 'CertifiedParticipants',
+					activeFor: ['CertifiedParticipants'],
+					condition: () => {
+						return userResource?.data
+					},
+				},
+				{
+					label: 'Jobs',
+					icon: 'Briefcase',
+					to: 'Jobs',
+					activeFor: ['Jobs', 'JobDetail'],
+				},
+				{
+					label: 'Statistics',
+					icon: 'TrendingUp',
+					to: 'Statistics',
+					activeFor: ['Statistics'],
+				},
+				{
+					label: 'Contact Us',
+					icon: settings.data?.contact_us_url ? 'Headset' : 'Mail',
+					to: settings.data?.contact_us_url
+						? settings.data?.contact_us_url
+						: settings.data?.contact_us_email,
+					condition: () => {
+						return (
+							(!forMobile &&
+								settings?.data?.contact_us_email &&
+								userResource?.data) ||
+							settings?.data?.contact_us_url
+						)
+					},
+				},
+			],
+		},
+		{
+			label: 'Assessments',
+			hideLabel: true,
+			items: [
+				{
+					label: 'Quizzes',
+					icon: 'CircleHelp',
+					to: 'Quizzes',
+					condition: () => {
+						return !forMobile && isAdmin()
+					},
+					activeFor: [
+						'Quizzes',
+						'QuizForm',
+						'NewQuiz',
+						'QuizPage',
+						'QuizSubmissions',
+						'QuizSubmission',
+						'Questions',
+					],
+				},
+				{
+					label: 'Assignments',
+					icon: 'Pencil',
+					to: 'Assignments',
+					condition: () => {
+						return !forMobile && isAdmin()
+					},
+					activeFor: [
+						'Assignments',
+						'AssignmentSubmissions',
+						'AssignmentSubmission',
+					],
+				},
+				{
+					label: 'Programming Exercises',
+					icon: 'Code',
+					to: 'ProgrammingExercises',
+					condition: () => {
+						return !forMobile && isAdmin()
+					},
+					activeFor: [
+						'ProgrammingExercises',
+						'ProgrammingExerciseSubmissions',
+						'ProgrammingExerciseSubmission',
+					],
+				},
+			],
+		},
+	]
+}
+
+const isAdmin = () => {
+	const { userResource } = usersStore()
+	return (
+		userResource?.data?.is_instructor ||
+		userResource?.data?.is_moderator ||
+		userResource.data?.is_evaluator
+	)
+}
+
+const checkIfCanAddProgram = (forMobile = false) => {
+	const { userResource } = usersStore()
+	const { programs } = useSettings()
+	if (!userResource.data) return false
+	if (forMobile) return false
+	if (userResource?.data?.is_moderator || userResource?.data?.is_instructor) {
+		return true
+	}
+	return (
+		programs.data?.enrolled.length > 0 ||
+		programs.data?.published.length > 0
+	)
+}
+
+export function getFormattedDateRange(
+	startDate,
+	endDate,
+	format = 'DD MMM YYYY'
+) {
+	if (startDate === endDate) {
+		return dayjs(startDate).format(format)
+	}
+	return `${dayjs(startDate).format(format)} - ${dayjs(endDate).format(
+		format
+	)}`
+}
+
+export function getLineStartPosition(string, position) {
+	const charLength = 1
+	let char = ''
+
+	while (char !== '\n' && position > 0) {
+		position = position - charLength
+		char = string.substr(position, charLength)
+	}
+
+	if (char === '\n') {
+		position += 1
+	}
+
+	return position
+}
+
+export function singularize(word) {
+	const endings = {
+		ves: 'fe',
+		ies: 'y',
+		i: 'us',
+		zes: 'ze',
+		ses: 's',
+		es: 'e',
+		s: '',
+	}
+	return word.replace(
+		new RegExp(`(${Object.keys(endings).join('|')})$`),
+		(r) => endings[r]
+	)
+}
+
+export const validateFile = async (
+	file,
+	showToast = true,
+	fileType = 'image'
+) => {
+	const extension = file.name.split('.').pop().toLowerCase()
+	const error = (msg) => {
+		if (showToast) toast.error(msg)
+		console.error(msg)
+		return msg
+	}
+
+	if (fileType == 'pdf' && extension != 'pdf') {
+		return error(__('Only PDF files are allowed.'))
+	} else if (fileType == 'document' && !['doc', 'docx'].includes(extension)) {
+		return error(
+			__('Only document file of type .doc or .docx are allowed.')
+		)
+	} else if (fileType == 'zip' && extension != 'zip') {
+		return error(__('Only ZIP files are allowed.'))
+	} else if (
+		['image', 'video'].includes(fileType) &&
+		!file.type.startsWith(`${fileType}/`)
+	) {
+		return error(__('Only {0} file is allowed.').format(fileType))
+	} else if (file.type === 'image/svg+xml') {
+		const text = await file.text()
+
+		const blacklist = [
+			/<script[\s>]/i,
+			/on\w+=["']?/i,
+			/javascript:/i,
+			/data:/i,
+			/<iframe[\s>]/i,
+			/<object[\s>]/i,
+			/<embed[\s>]/i,
+			/<link[\s>]/i,
+		]
+
+		for (const pattern of blacklist) {
+			if (pattern.test(text)) {
+				return error(__('SVG contains potentially unsafe content.'))
+			}
+		}
+	}
+
+	return null
+}
+
+const sanitizeJSON = (node) => {
+	if (Array.isArray(node)) return node.map(sanitizeJSON)
+	if (node && typeof node === 'object') {
+		const temp = {}
+		for (const n in node) {
+			temp[n] = sanitizeJSON(node[n])
+		}
+		return temp
+	}
+	if (
+		typeof node === 'string' &&
+		(node.includes('<') || node.includes('>'))
+	) {
+		return DOMPurify.sanitize(node)
+	}
+	return node
+}
+
+export const sanitizeEditorJs = (data) => {
+	if (!data || !Array.isArray(data.blocks)) return data
+	for (const node of data.blocks) {
+		if (node && node.type !== 'code') {
+			node.data = sanitizeJSON(node.data)
+		}
+	}
+	return data
+}
+
+export const sanitizeHTML = (text) => {
+	text = DOMPurify.sanitize(decodeEntities(text), {
+		ALLOWED_TAGS: [
+			'b',
+			'br',
+			'h1',
+			'h2',
+			'h3',
+			'h4',
+			'h5',
+			'h6',
+			'table',
+			'thead',
+			'tbody',
+			'tr',
+			'th',
+			'td',
+			'i',
+			'em',
+			'strong',
+			'a',
+			'p',
+			'br',
+			'ul',
+			'ol',
+			'li',
+			'img',
+			'blockquote',
+		],
+		ALLOWED_ATTR: ['href', 'target', 'src'],
+	})
+	return text
+}
+
+// Re-exported from a lean module so it stays testable without index.js's heavy
+// frappe-ui/EditorJS import chain (same pattern as ./plyr below).
+export { sanitizeRichHTML } from './sanitizeRichHTML'
+
+export const canCreateCourse = () => {
+	const { userResource } = usersStore()
+	return (
+		!readOnlyMode &&
+		(userResource.data?.is_instructor || userResource.data?.is_moderator)
+	)
+}
+
+// Plyr setup lives in ./plyr (a lean module that only pulls in Plyr + the
+// settings store) so it stays importable/testable without index.js's heavy
+// EditorJS/frappe-ui import chain. Re-exported here for existing callers.
+export { enablePlyr } from './plyr'
+
+export const createLMSCategory = (name) => {
+	return call('frappe.client.insert', {
+		doc: {
+			doctype: 'LMS Category',
+			category: name,
+		},
+	})
+		.then((data) => {
+			toast.success(__('Category created successfully'))
+			return data.name
+		})
+		.catch((err) => {
+			toast.error(
+				cleanError(err.messages?.[0]) || __('Unable to create category')
+			)
+		})
+}
+
+// Settings is the desktop dialog, mounted only inside the sidebar's
+// UserDropdown; the phone has no settings pages. On a phone the hash below
+// reaches nothing, so this says so instead of closing and losing whatever
+// the user had half-filled in behind it.
+//
+// Takes the tab's slug, not its label, since renaming a label must not break
+// callers. Returns whether Settings actually opened, so a caller that closes
+// itself separately can stay put when it did not.
+export const openSettings = (slug, close = null) => {
+	const settingsStore = useSettings()
+	if (!settingsStore.isSettingsMounted) {
+		toast.error(__('Settings is only available on a larger screen.'))
+		return false
+	}
+	if (close) {
+		close()
+	}
+	pushSettingsHash(router, slug)
+	return true
+}
+
+export const cleanError = (message) => {
+	// Every caller passes `err.messages?.[0] || err`; frappe-ui attaches
+	// `.messages` only to a server-error response, so a transport failure
+	// re-throws a raw object. Coerced here, not per call site, since throwing
+	// from inside a catch loses the original error and skips its cleanup.
+	const text =
+		typeof message === 'string'
+			? message
+			: String(message?.message ?? message ?? '')
+	const cleanMessage = text.replace(/<[^>]+>/g, (match) => {
+		return match.replace(/<\/?[^>]+(>|$)/g, '')
+	})
+	return cleanMessage
+		.replace(/&nbsp;/g, ' ')
+		.replace(/&lt;/g, '<')
+		.replace(/&gt;/g, '>')
+		.replace(/&quot;/g, '"')
+		.replace(/&#39;/g, "'")
+		.replace(/&amp;/g, '&')
+		.replace(/&#x60;/g, '`')
+		.replace(/&#x3D;/g, '=')
+		.replace(/&#x2F;/g, '/')
+		.replace(/&#x2C;/g, ',')
+		.replace(/&#x3B;/g, ';')
+		.replace(/&#x3A;/g, ':')
+}
+
+export const getMetaInfo = (type, route, meta) => {
+	call('lms.lms.api.get_meta_info', {
+		type: type,
+		route: route,
+	}).then((data) => {
+		if (data.length) {
+			data.forEach((row) => {
+				if (row.key == 'description') {
+					meta.description = row.value
+				} else if (row.key == 'keywords') {
+					meta.keywords = row.value
+				}
+			})
+		}
+	})
+}
+
+export const updateMetaInfo = (type, route, meta) => {
+	call('lms.lms.api.update_meta_info', {
+		meta_type: type,
+		route: route,
+		meta_tags: [
+			{ key: 'description', value: meta.description },
+			{ key: 'keywords', value: meta.keywords },
+		],
+	}).catch((error) => {
+		toast.error(__('Failed to update meta tags {0}').format(error))
+		console.error(error)
+	})
+}
+
+const getRootNode = (selector = '#editor') => {
+	const root = document.querySelector(selector)
+	if (!root) {
+		console.warn(`Root node not found for selector: ${selector}`)
+	}
+	return root
+}
+
+// A saved highlight belongs to the lesson's own text, so text inside an inline
+// quiz, assignment or exercise is never a match.
+const createTextWalker = (root, phrase) => {
+	return document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+		acceptNode(node) {
+			if (node.parentElement?.closest(ASSESSMENT_BLOCK_SELECTOR))
+				return NodeFilter.FILTER_SKIP
+			return node.nodeValue.toLowerCase().includes(phrase.toLowerCase())
+				? NodeFilter.FILTER_ACCEPT
+				: NodeFilter.FILTER_SKIP
+		},
+	})
+}
+
+const findMatchingTextNode = (walker, phrase) => {
+	const node = walker.nextNode()
+	if (!node) return null
+
+	const startIndex = node.nodeValue
+		.toLowerCase()
+		.indexOf(phrase.toLowerCase())
+	const endIndex = startIndex + phrase.length
+
+	return { node, startIndex, endIndex }
+}
+
+const createHighlightSpan = (color, name, scrollIntoView) => {
+	const span = document.createElement('span')
+	span.className = 'highlighted-text'
+	if (scrollIntoView) {
+		// token-exempt: colour is a saved highlight swatch name
+		span.style.border = `2px solid var(--surface-${color}-5)`
+		span.style.borderRadius = '4px'
+	} else {
+		// token-exempt: colour is a saved highlight swatch name
+		span.style.backgroundColor = `var(--surface-${color}-3)`
+	}
+	span.dataset.name = name
+	return span
+}
+
+const wrapRangeInHighlight = (
+	{ node, startIndex, endIndex },
+	color,
+	name,
+	scrollIntoView
+) => {
+	const range = document.createRange()
+	range.setStart(node, startIndex)
+	range.setEnd(node, endIndex)
+
+	const span = createHighlightSpan(color, name, scrollIntoView)
+	range.surroundContents(span)
+}
+
+export const highlightText = (note, scrollIntoView = false) => {
+	if (!note?.highlighted_text) return
+
+	const root = getRootNode()
+	if (!root) return
+
+	const phrase = note.highlighted_text
+	const color = note.color.toLowerCase()
+
+	const walker = createTextWalker(root, phrase)
+	const match = findMatchingTextNode(walker, phrase)
+	if (!match) return
+
+	wrapRangeInHighlight(match, color, note.name, scrollIntoView)
+
+	if (scrollIntoView) {
+		match.node.parentElement.scrollIntoView({
+			behavior: 'smooth',
+			block: 'center',
+		})
+		setTimeout(() => {
+			const highlightedElements =
+				document.querySelectorAll('.highlighted-text')
+			highlightedElements.forEach((el) => {
+				if (el.dataset.name === note.name) {
+					el.style.border = 'none'
+					el.style.borderRadius = '0px'
+				}
+			})
+		}, 3000)
+	}
+}
+
+export const scrollToReference = (text) => {
+	highlightText({ highlighted_text: text, color: 'yellow', name: '' }, true)
+}
+
+export const blockQuotesClick = () => {
+	document.querySelectorAll('blockquote').forEach((el) => {
+		el.addEventListener('click', (e) => {
+			const text = e.target.textContent || ''
+			if (text) {
+				scrollToReference(text)
+			}
+		})
+	})
+}
+
+export { decodeEntities, htmlToText } from './inertHtml'
+
+export function validateEmail(email) {
+	return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email || '').trim())
+}

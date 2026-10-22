@@ -1,0 +1,130 @@
+<template>
+	<Dialog
+		v-model:open="show"
+		title="Apply for this job"
+		size="lg"
+		:actions="[
+			{
+				label: 'Submit',
+				variant: 'solid',
+				onClick: ({ close }) => submitResume(close),
+			},
+		]"
+	>
+		<template #default>
+			<div class="flex flex-col gap-4 text-base">
+				<p class="text-ink-gray-9">
+					{{
+						__(
+							'Submit your resume to proceed with your application for this position. Upon submission, it will be shared with the job poster.'
+						)
+					}}
+				</p>
+				<div v-if="!resume">
+					<FileUploader
+						:fileTypes="['.pdf']"
+						:validateFile="validateFile"
+						:private="true"
+						@success="
+							(file) => {
+								resume = file
+							}
+						"
+					>
+						<template v-slot="{ file, progress, uploading, openFileSelector }">
+							<div class="">
+								<Button
+									class="text-p-base-medium"
+									:loading="uploading"
+									@click="openFileSelector"
+								>
+									<template #prefix>
+										<span class="lucide-upload size-4" />
+									</template>
+									{{
+										uploading
+											? __('Uploading {0}%').format(progress)
+											: __('Upload your resume')
+									}}
+								</Button>
+							</div>
+						</template>
+					</FileUploader>
+				</div>
+				<div v-else class="flex items-center">
+					<div class="border rounded-5 p-2 me-2">
+						<span class="lucide-file-text h-5 w-5 text-ink-gray-7" />
+					</div>
+					<div class="flex flex-col">
+						<span class="text-ink-gray-9">
+							{{ resume.file_name }}
+						</span>
+						<span class="text-sm text-ink-gray-4 mt-1">
+							{{ getFileSize(resume.file_size) }}
+						</span>
+					</div>
+				</div>
+			</div>
+		</template>
+	</Dialog>
+</template>
+<script setup>
+import { Dialog, FileUploader, Button, createResource, toast } from 'frappe-ui'
+import { ref, inject } from 'vue'
+import { getFileSize } from '@/utils/'
+import { resourceErrorMessage, submitResource } from '@/utils/resource'
+
+const resume = ref(null)
+const show = defineModel()
+const user = inject('$user')
+const application = defineModel('application')
+
+const props = defineProps({
+	job: {
+		type: String,
+		required: true,
+	},
+})
+
+const validateFile = (file) => {
+	let extension = file.name.split('.').pop().toLowerCase()
+	if (extension != 'pdf') {
+		return 'Only PDF file is allowed'
+	}
+}
+
+const jobApplication = createResource({
+	url: 'frappe.client.insert',
+	makeParams(values) {
+		return {
+			doc: {
+				doctype: 'LMS Job Application',
+				user: user.data?.name,
+				resume: resume.value?.file_url,
+				job: props.job,
+			},
+		}
+	},
+})
+
+const submitResume = (close) =>
+	submitResource(
+		jobApplication,
+		{},
+		{
+			validate() {
+				if (!resume.value) {
+					return __('Please upload your resume')
+				}
+			},
+			onSuccess() {
+				toast.success(__('Your application has been submitted successfully'))
+				application.value.reload()
+				close()
+			},
+			onError(err) {
+				toast.error(resourceErrorMessage(err))
+			},
+		}
+	)
+</script>

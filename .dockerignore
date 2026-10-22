@@ -1,0 +1,15 @@
+.git
+.scratch
+.runtime
+.scratch
+node_modules
+frontend/node_modules
+**/node_modules
+**/__pycache__
+*.log
+sites
+e2e/playwright
+
+.env
+.env.*
+!.env.example

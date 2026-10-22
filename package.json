@@ -1,0 +1,26 @@
+{
+	"name": "elearning",
+	"version": "1.0.0",
+	"description": "Open source learning management system",
+	"type": "module",
+	"scripts": {
+		"test-local": "playwright test --ui",
+		"postinstall": "cd frontend && yarn install --check-files",
+		"dev": "cd frontend && yarn dev",
+		"build": "cd frontend && yarn build"
+	},
+	"private": true,
+	"author": "Frappe",
+	"license": "AGPL-3.0-or-later",
+	"engines": {
+		"node": ">=24"
+	},
+	"devDependencies": {
+		"@playwright/test": "^1.56.0",
+		"@semantic-release/exec": "^7.1.0",
+		"@semantic-release/git": "^10.0.1"
+	},
+	"dependencies": {
+		"pre-commit": "^1.2.2"
+	}
+}

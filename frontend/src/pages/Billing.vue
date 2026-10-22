@@ -1,0 +1,504 @@
+<template>
+	<PageHeader :breadcrumbs="breadcrumbs" />
+	<PageBody :title="__('Billing Details')">
+		<div v-if="returnedPayment" class="p-5 space-y-4" data-testid="checkout-return">
+			<p role="status">{{ checkoutMessage }}</p>
+			<a v-if="confirmation.data?.paid" :href="safeUrl(confirmation.data.redirect_to)">{{ __('Open your course') }}</a>
+			<Button v-else :loading="confirmation.loading" :disabled="confirmation.loading" @click="checkPayment">{{ __('Check payment again') }}</Button>
+		</div>
+		<div v-else-if="access.data?.access && orderSummary.data" class="px-5 pb-10">
+			<div class="flex flex-col lg:flex-row justify-between">
+				<div class="flex flex-col lg:order-last mb-10 lg:mt-10 lg:w-1/4">
+					<div class="h-fit bg-surface-gray-2 rounded-5 p-5 space-y-4">
+						<div class="space-y-1">
+							<div class="text-ink-gray-6 uppercase text-xs">
+								{{ __('Payment for ') }} {{ type }}:
+							</div>
+							<div class="leading-5 text-ink-gray-9">
+								{{ orderSummary.data.title }}
+							</div>
+						</div>
+						<div
+							v-if="
+								orderSummary.data.gst_applied ||
+								orderSummary.data.discount_amount
+							"
+							class="space-y-1"
+						>
+							<div class="text-ink-gray-6 uppercase text-xs">
+								{{ __('Original Amount') }}:
+							</div>
+							<div class="text-ink-gray-9">
+								{{ orderSummary.data.original_amount_formatted }}
+							</div>
+						</div>
+						<div v-if="orderSummary.data.discount_amount" class="space-y-1">
+							<div class="text-ink-gray-6">{{ __('Discount') }}:</div>
+							<div>- {{ orderSummary.data.discount_amount_formatted }}</div>
+						</div>
+						<div v-if="orderSummary.data.gst_applied" class="space-y-1">
+							<div class="text-ink-gray-6 uppercase text-xs">
+								{{ __('GST Amount') }}:
+							</div>
+							<div class="text-ink-gray-9">
+								{{ orderSummary.data.gst_amount_formatted }}
+							</div>
+						</div>
+						<div class="space-y-1 border-t border-outline-gray-3 pt-4 mt-2">
+							<div class="uppercase text-ink-gray-6 text-xs">
+								{{ __('Total') }}:
+							</div>
+							<div class="font-bold text-ink-gray-9">
+								{{ orderSummary.data.total_amount_formatted }}
+							</div>
+						</div>
+					</div>
+
+					<div class="bg-surface-gray-2 rounded-5 p-4 space-y-2 my-5">
+						<span class="text-ink-gray-6 uppercase text-xs">
+							{{ __('Enter a Coupon Code') }}:
+						</span>
+						<div class="flex items-center gap-x-2">
+							<FormControl
+								v-model="appliedCoupon"
+								:disabled="orderSummary.data.discount_amount > 0"
+								:aria-label="__('Coupon Code')"
+								@keydown.enter="applyCouponCode"
+								placeholder="COUPON2025"
+								autocomplete="off"
+								class="flex-1 [&_input]:bg-surface-base [&_input]:uppercase"
+							/>
+							<Button
+								v-if="!orderSummary.data.discount_amount"
+								@click="applyCouponCode"
+								variant="outline"
+							>
+								{{ __('Apply') }}
+							</Button>
+							<Button
+								v-if="orderSummary.data.discount_amount"
+								:label="__('Remove coupon')"
+								@click="removeCoupon"
+								variant="outline"
+							>
+								<template #icon>
+									<span class="lucide-x size-4" />
+								</template>
+							</Button>
+						</div>
+					</div>
+
+					<p
+						class="bg-surface-amber-2 text-ink-amber-5 text-sm leading-5 p-2 rounded-5"
+					>
+						{{
+							__(
+								'Please ensure that the billing name you enter is correct, as it will be used on your invoice.'
+							)
+						}}
+					</p>
+				</div>
+
+				<div class="flex-1 lg:me-10">
+					<div class="mb-5">
+						<h2 class="text-lg-semibold text-ink-gray-9">
+							{{ __('Address') }}
+						</h2>
+					</div>
+					<div class="grid grid-cols-1 md:grid-cols-2 gap-5">
+						<div class="space-y-4">
+							<FormControl
+								:label="__('Billing Name')"
+								v-model="billingDetails.billing_name"
+								autocomplete="name"
+								:required="!!fieldMeta.billing_name?.reqd"
+							/>
+							<FormControl
+								:label="__('Address Line 1')"
+								v-model="billingDetails.address_line1"
+								autocomplete="address-line1"
+								:required="!!fieldMeta.address_line1?.reqd"
+							/>
+							<FormControl
+								:label="__('Address Line 2')"
+								v-model="billingDetails.address_line2"
+								autocomplete="address-line2"
+								:required="!!fieldMeta.address_line2?.reqd"
+							/>
+							<FormControl
+								:label="__('City')"
+								v-model="billingDetails.city"
+								autocomplete="address-level2"
+								:required="!!fieldMeta.city?.reqd"
+							/>
+							<Combobox
+								v-if="billingDetails.country == 'India'"
+								:label="__('State/Province')"
+								v-model="billingDetails.state"
+								autocomplete="address-level1"
+								:options="INDIAN_STATE_OPTIONS"
+								:placeholder="__('Select a state')"
+								:required="!!fieldMeta.state?.reqd"
+							/>
+							<FormControl
+								v-else
+								:label="__('State/Province')"
+								v-model="billingDetails.state"
+								autocomplete="address-level1"
+								:required="!!fieldMeta.state?.reqd"
+							/>
+						</div>
+						<div class="space-y-4">
+							<Link
+								doctype="Country"
+								:value="billingDetails.country"
+								@change="(option) => changeCurrency(option)"
+								:label="__('Country')"
+								:required="!!fieldMeta.country?.reqd"
+								autocomplete="country-name"
+							/>
+							<FormControl
+								:label="__('Postal Code')"
+								v-model="billingDetails.pincode"
+								autocomplete="postal-code"
+								:required="!!fieldMeta.pincode?.reqd"
+							/>
+							<FormControl
+								:label="__('Phone Number')"
+								v-model="billingDetails.phone"
+								autocomplete="tel"
+								:required="!!fieldMeta.phone?.reqd"
+							/>
+							<Link
+								doctype="LMS Source"
+								:value="billingDetails.source"
+								@change="(option) => (billingDetails.source = option)"
+								:label="__('Where did you hear about us?')"
+								:required="!!fieldMeta.source?.reqd"
+							/>
+							<FormControl
+								v-if="billingDetails.country == 'India'"
+								:label="__('GST Number')"
+								v-model="billingDetails.gstin"
+								:required="!!fieldMeta.gstin?.reqd"
+							/>
+							<FormControl
+								v-if="billingDetails.country == 'India'"
+								:label="__('PAN Number')"
+								v-model="billingDetails.pan"
+								:required="!!fieldMeta.pan?.reqd"
+							/>
+						</div>
+					</div>
+					<div
+						class="flex flex-col lg:flex-row items-start lg:items-center justify-between border-t pt-4 mt-8 space-y-4 lg:space-y-0"
+					>
+						<div>
+							<FormControl
+								:label="
+									__(
+										'I consent to my personal information being stored for invoicing'
+									)
+								"
+								type="checkbox"
+								class="leading-6"
+								v-model="billingDetails.member_consent"
+								:error="
+									showConsentWarning
+										? __(
+												'Please provide your consent to proceed with the payment'
+										  )
+										: undefined
+								"
+							/>
+						</div>
+						<Button
+							variant="solid"
+							size="md"
+							class="ms-auto text-p-base-medium"
+							@click="generatePaymentLink()"
+						>
+							{{
+								isZeroAmount ? __('Enroll for Free') : __('Proceed to Payment')
+							}}
+						</Button>
+					</div>
+				</div>
+			</div>
+		</div>
+		<div v-else-if="access.data?.message">
+			<NotPermitted
+				:text="access.data.message"
+				:buttonLabel="type == 'course' ? 'Checkout Course' : 'Checkout Batch'"
+				:buttonLink="
+					type == 'course'
+						? getLmsRoute(`courses/${name}`)
+						: getLmsRoute(`batches/${name}`)
+				"
+			/>
+		</div>
+		<div v-else-if="!user.data?.name">
+			<NotPermitted
+				:text="__('Please login to access this page.')"
+				:buttonLink="`/login?redirect-to=${getLmsRoute(
+					`billing/${type}/${name}`
+				)}`"
+			/>
+		</div>
+	</PageBody>
+</template>
+<script setup>
+import {
+	Button,
+	Combobox,
+	createResource,
+	FormControl,
+	usePageMeta,
+	toast,
+} from 'frappe-ui'
+import { reactive, inject, onMounted, computed, ref, watch } from 'vue'
+import PageHeader from '@/components/Layouts/pages/PageHeader.vue'
+import PageBody from '@/components/Layouts/pages/PageBody.vue'
+import { sessionStore } from '../stores/session'
+import Link from '@/components/Controls/Link.vue'
+import NotPermitted from '@/components/NotPermitted.vue'
+import { getLmsRoute } from '@/utils/basePath'
+import { safeUrl } from '@/utils/safeUrl'
+import {
+	INDIAN_STATE_OPTIONS,
+	canonicalIndianState,
+} from '@/utils/indianStates'
+
+const breadcrumbs = [
+	{ label: __('Billing Details'), route: { name: 'Billing' } },
+]
+
+const user = inject('$user')
+const { brand } = sessionStore()
+const showConsentWarning = ref(false)
+const returnedPayment = new URLSearchParams(window.location.search).get('payment')
+const checkoutError = ref('')
+const confirmation = createResource({
+	url: 'lms.lms.payments.confirm_checkout',
+	params: { payment: returnedPayment },
+	onSuccess() { checkoutError.value = '' },
+	onError(error) {
+		checkoutError.value = error.messages?.[0] || error.message || __('Payment confirmation is not available yet.')
+	},
+})
+// The error handler renders the refusal inline; consume the rejected request.
+const checkPayment = () => confirmation.submit().catch(() => {})
+const checkoutMessage = computed(() => {
+	if (confirmation.loading) return __('Checking your payment...')
+	if (checkoutError.value) return checkoutError.value
+	if (confirmation.data?.paid) return __('Payment confirmed. Your enrollment is ready.')
+	return __('Your payment is not confirmed yet. Check again before starting another payment.')
+})
+
+
+onMounted(() => {
+	if (user.data?.name) {
+		if (returnedPayment) checkPayment()
+		else access.submit()
+	}
+})
+
+const props = defineProps({
+	type: {
+		type: String,
+		required: true,
+	},
+	name: {
+		type: String,
+		required: true,
+	},
+})
+
+const access = createResource({
+	url: 'lms.lms.api.validate_billing_access',
+	params: {
+		billing_type: props.type,
+		name: props.name,
+	},
+	onSuccess(data) {
+		if (!data.access) return
+		Object.assign(fieldMeta, data.billing_field_meta || {})
+		setBillingDetails(data.address)
+		orderSummary.submit()
+	},
+})
+
+const orderSummary = createResource({
+	url: 'lms.lms.utils.get_order_summary',
+	makeParams(values) {
+		return {
+			doctype: props.type == 'batch' ? 'LMS Batch' : 'LMS Course',
+			docname: props.name,
+			country: billingDetails.country,
+			coupon: couponCode(),
+		}
+	},
+	onError(err) {
+		showError(err)
+	},
+})
+
+const appliedCoupon = ref(null)
+const couponCode = () => appliedCoupon.value?.trim().toUpperCase() || null
+const billingDetails = reactive({})
+const fieldMeta = reactive({})
+
+const getDefault = (fieldname) => fieldMeta[fieldname]?.default || ''
+
+const setBillingDetails = (data) => {
+	billingDetails.billing_name = data?.billing_name || getDefault('billing_name')
+	billingDetails.address_line1 =
+		data?.address_line1 || getDefault('address_line1')
+	billingDetails.address_line2 =
+		data?.address_line2 || getDefault('address_line2')
+	billingDetails.city = data?.city || getDefault('city')
+	billingDetails.state = data?.state || getDefault('state')
+	billingDetails.country = data?.country || getDefault('country')
+	billingDetails.pincode = data?.pincode || getDefault('pincode')
+	billingDetails.phone = data?.phone || getDefault('phone')
+	billingDetails.source = data?.source || getDefault('source')
+	billingDetails.gstin = data?.gstin || getDefault('gstin')
+	billingDetails.pan = data?.pan || getDefault('pan')
+	normalizeState()
+}
+
+// Addresses saved before the dropdown existed hold free text ("GUJARAT"), which
+// matches no option and would look unselected. Anything unrecognised is left
+// alone so validation can report it.
+const normalizeState = () => {
+	if (billingDetails.country != 'India') return
+	const canonical = canonicalIndianState(billingDetails.state)
+	if (canonical) billingDetails.state = canonical
+}
+
+const paymentLink = createResource({
+	url: 'lms.lms.payments.get_payment_link',
+	makeParams(values) {
+		let data = {
+			doctype: props.type == 'batch' ? 'LMS Batch' : 'LMS Course',
+			docname: props.name,
+			address: billingDetails,
+			payment_for_certificate: props.type == 'certificate',
+			coupon_code: couponCode(),
+			country: billingDetails.country,
+		}
+		return data
+	},
+})
+
+const generatePaymentLink = () => {
+	paymentLink.submit(
+		{},
+		{
+			validate() {
+				if (!billingDetails.source && fieldMeta.source?.reqd) {
+					return __('Please let us know where you heard about us from.')
+				}
+				if (!billingDetails.member_consent) {
+					showConsentWarning.value = true
+					return __('Please provide your consent to proceed with the payment.')
+				}
+				return validateAddress()
+			},
+			onSuccess(data) {
+				if (typeof data !== 'string' || !data) {
+					toast.error(
+						__('Could not start the payment. Please contact the administrator.')
+					)
+					return
+				}
+				window.location.href = data
+			},
+			onError(err) {
+				showError(err)
+			},
+		}
+	).catch(() => {})
+}
+
+function applyCouponCode() {
+	if (!couponCode()) {
+		toast.error(__('Please enter a coupon code'))
+		return
+	}
+	orderSummary.reload()
+}
+
+function removeCoupon() {
+	appliedCoupon.value = null
+	orderSummary.reload()
+}
+
+const validateAddress = () => {
+	let billingFields = [
+		'billing_name',
+		'address_line1',
+		'address_line2',
+		'city',
+		'state',
+		'pincode',
+		'country',
+		'phone',
+		'gstin',
+		'pan',
+	]
+	let mandatoryFields = billingFields.filter((f) => fieldMeta[f]?.reqd)
+	for (let field of mandatoryFields) {
+		if (!billingDetails[field])
+			return (
+				'Please enter a valid ' +
+				field
+					.replaceAll('_', ' ')
+					.toLowerCase()
+					.replace(/\b\w/g, (s) => s.toUpperCase())
+			)
+	}
+
+	if (billingDetails.gstin && !billingDetails.pan)
+		return 'Please enter a valid pan number.'
+
+	if (billingDetails.country != 'India') return
+
+	if (!billingDetails.state) return __('Please select your state.')
+
+	// The dropdown only ever yields canonical names; this catches an older
+	// free-text address that no spelling of ours can resolve.
+	const canonical = canonicalIndianState(billingDetails.state)
+	if (!canonical) return __('Please select your state from the list.')
+	billingDetails.state = canonical
+}
+
+// A validation failure arrives as an Error; handing that to toast.error renders
+// an empty toast, which is why a rejected checkout looked like a dead button.
+const showError = (err) => {
+	toast.error(err.messages?.[0] || err.message || err)
+}
+
+const changeCurrency = (country) => {
+	billingDetails.country = country
+	normalizeState()
+	orderSummary.reload()
+}
+
+const isZeroAmount = computed(() => {
+	return orderSummary.data && parseFloat(orderSummary.data.total_amount) <= 0
+})
+
+watch(billingDetails, () => {
+	if (billingDetails.member_consent) {
+		showConsentWarning.value = false
+	}
+})
+
+usePageMeta(() => {
+	return {
+		title: __('Billing Details'),
+		icon: brand.favicon,
+	}
+})
+</script>

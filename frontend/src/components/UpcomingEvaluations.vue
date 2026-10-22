@@ -1,0 +1,242 @@
+<template>
+	<div v-if="!forHome || (forHome && upcoming_evals.data?.length)">
+		<div class="flex items-center justify-between mb-4">
+			<div class="text-lg-semibold text-ink-gray-9">
+				{{ __('Upcoming Evaluations') }}
+			</div>
+			<Button v-if="canScheduleEvals" @click="openEvalModal">
+				{{ __('Schedule') }}
+			</Button>
+		</div>
+		<Alert
+			v-if="endDate && !endDateHasPassed"
+			theme="amber"
+			class="mb-4"
+			:description="
+				__('Please make sure to schedule your evaluation before this date.')
+			"
+		>
+			<template #title>
+				{{ __('The last day to schedule your evaluations is ') }}
+				<span class="font-medium">
+					{{ dayjs(endDate).format('DD MMMM YYYY') }} </span
+				>.
+			</template>
+		</Alert>
+		<Alert
+			v-else-if="endDateHasPassed"
+			theme="red"
+			class="mb-4"
+			:title="__('Scheduling closed')"
+			:description="
+				__(
+					'The deadline to schedule evaluations has passed. Please contact the Instructor for assistance.'
+				)
+			"
+		/>
+		<div v-if="upcoming_evals.data?.length">
+			<div
+				class="grid gap-4"
+				:class="forHome ? 'grid-cols-1 md:grid-cols-4' : 'grid-cols-1'"
+			>
+				<div v-for="evl in upcoming_evals.data" :key="evl.name">
+					<div
+						class="border hover:border-outline-gray-3 text-ink-gray-7 rounded-5 p-3"
+					>
+						<div class="flex justify-between mb-3">
+							<span class="font-semibold text-ink-gray-9 leading-5">
+								{{ evl.course_title }}
+							</span>
+							<Dropdown
+								v-if="evl.date > dayjs().format()"
+								:options="[
+									{
+										label: __('Cancel'),
+										icon: 'lucide-ban',
+										onClick() {
+											cancelEvaluation(evl)
+										},
+									},
+								]"
+								side="left"
+							>
+								<template v-slot="{ open }">
+									<Button variant="ghost" :label="__('Options')">
+										<template #icon>
+											<span class="lucide-ellipsis-vertical w-4 h-4" />
+										</template>
+									</Button>
+								</template>
+							</Dropdown>
+						</div>
+						<div class="flex items-center mb-2">
+							<span class="lucide-calendar w-4 h-4" />
+							<span class="ms-2">
+								{{ dayjs(evl.date).format('DD MMMM YYYY') }}
+							</span>
+						</div>
+						<div class="flex items-center mb-2">
+							<span class="lucide-clock w-4 h-4" />
+							<span class="ms-2">
+								{{ formatTime(evl.start_time) }}
+							</span>
+						</div>
+						<div v-if="evl.timezone" class="flex items-center mb-2">
+							<span class="lucide-globe w-4 h-4" />
+							<span class="ms-2">
+								{{ formatTimezone(evl.timezone, evl.date) }}
+							</span>
+						</div>
+						<div class="flex items-center">
+							<span class="lucide-graduation-cap w-4 h-4" />
+							<span class="ms-2">
+								{{ evl.evaluator_name }}
+							</span>
+						</div>
+						<div
+							v-if="evl.google_meet_link"
+							class="flex items-center justify-between gap-x-2 mt-4"
+						>
+							<Button @click="openEvalCall(evl)" class="w-full">
+								<template #prefix>
+									<span class="lucide-headset w-4 h-4" />
+								</template>
+								{{ __('Join Call') }}
+							</Button>
+						</div>
+					</div>
+				</div>
+			</div>
+		</div>
+		<div v-else-if="!endDateHasPassed" class="text-ink-gray-7">
+			{{ __('Schedule an evaluation to get certified.') }}
+		</div>
+	</div>
+	<EvaluationModal
+		:batch="batch"
+		:endDate="endDate"
+		:courses="courses"
+		v-model="showEvalModal"
+		v-model:reloadEvals="upcoming_evals"
+	/>
+</template>
+<script setup>
+import { inject, ref, getCurrentInstance, computed } from 'vue'
+import { formatTime } from '@/utils'
+import { formatTimezone } from '@/utils/timezone'
+import {
+	Alert,
+	Button,
+	createListResource,
+	call,
+	Dropdown,
+	toast,
+} from 'frappe-ui'
+import EvaluationModal from '@/components/Modals/EvaluationModal.vue'
+import { openExternal } from '@/utils/openExternal'
+
+const dayjs = inject('$dayjs')
+const user = inject('$user')
+const showEvalModal = ref(false)
+const app = getCurrentInstance()
+const { $dialog } = app.appContext.config.globalProperties
+
+const props = defineProps({
+	batch: {
+		type: String,
+		default: null,
+	},
+	courses: {
+		type: Array,
+		default: [],
+	},
+	endDate: {
+		type: String,
+		default: null,
+	},
+	forHome: {
+		type: Boolean,
+		default: false,
+	},
+})
+
+const upcoming_evals = createListResource({
+	doctype: 'LMS Certificate Request',
+	filters: {
+		course: props.courses?.length
+			? ['in', props.courses.map((course) => course.course)]
+			: undefined,
+		batch_name: props.batch || undefined,
+		status: 'Upcoming',
+		member: user?.data?.name,
+		date: ['>=', dayjs().format('YYYY-MM-DD')],
+	},
+	fields: [
+		'name',
+		'date',
+		'start_time',
+		'timezone',
+		'evaluator_name',
+		'course_title',
+		'member',
+		'member_name',
+		'google_meet_link',
+	],
+	orderBy: 'date',
+	auto: true,
+})
+
+function openEvalModal() {
+	showEvalModal.value = true
+}
+
+const openEvalCall = (evl) => {
+	openExternal(evl.google_meet_link)
+}
+
+const evaluationCourses = computed(() => {
+	return props.courses.filter((course) => {
+		return course.has_evaluator
+	})
+})
+
+const canScheduleEvals = computed(() => {
+	return (
+		upcoming_evals.data?.length != evaluationCourses.value?.length &&
+		!props.forHome &&
+		!endDateHasPassed.value
+	)
+})
+
+const endDateHasPassed = computed(() => {
+	return dayjs().isSameOrAfter(dayjs(props.endDate))
+})
+
+const cancelEvaluation = (evl) => {
+	$dialog({
+		title: __('Confirm Cancellation?'),
+		message: __(
+			'Are you sure you want to cancel this evaluation? This action cannot be undone.'
+		),
+		actions: [
+			{
+				label: __('Cancel'),
+				theme: 'red',
+				variant: 'solid',
+				onClick({ close }) {
+					call('lms.lms.api.cancel_evaluation', { evaluation: evl })
+						.then(() => {
+							upcoming_evals.reload()
+							toast.success(__('Evaluation cancelled successfully'))
+						})
+						.catch((err) => {
+							toast.error(__(err.messages?.[0] || err))
+							console.error(err)
+						})
+					close()
+				},
+			},
+		],
+	})
+}
+</script>

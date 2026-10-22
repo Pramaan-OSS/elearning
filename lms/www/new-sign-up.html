@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Invitation unavailable</title>
+<link rel="icon" href="/assets/lms/frontend/elearning.svg">
+<style>
+:root{color-scheme:light;font-family:system-ui,sans-serif;color:#141414;background:#ededed}
+body{margin:0;min-height:100vh;display:grid;place-items:center;background:radial-gradient(at 15% 10%,#ffffff90,transparent 55%)}
+main{width:min(360px,calc(100vw - 80px));padding:28px;border:1px solid #00000016;border-radius:24px;background:#ffffffa8;box-shadow:0 2px 2px #00000008}
+h1{font-family:Georgia,serif;font-weight:400;font-size:28px;margin:20px 0}p,label,input,select,button,a{font-size:14px;line-height:1.5}label{display:block;margin-top:16px}input,select{display:block;box-sizing:border-box;width:100%;padding:10px 12px;border:1px solid #00000030;border-radius:12px;margin-top:6px;background:white}input[type=checkbox]{display:inline-block;width:auto;margin-right:8px}button{cursor:pointer;border:1px solid #00000020;border-radius:12px;padding:10px 16px;background:#2b59d1;color:white;width:100%;margin-top:20px}button:disabled{opacity:.6;cursor:wait}a{display:inline-block;margin-top:16px;color:#444}a:focus-visible,button:focus-visible,input:focus-visible{outline:2px solid #2b59d1;outline-offset:3px}[role=alert]{color:#b91c1c}img{width:32px;height:32px}
+</style>
+</head>
+<body><main>
+<img src="/assets/lms/frontend/elearning.svg" alt="eLearning">
+<h1>{{ _("Invitation unavailable") }}</h1>
+<p>{{ _("This invitation format is no longer supported. Ask an administrator to create your account, or use local signup if it is enabled.") }}</p>
+<form id="new-sign-up">
+<label for="invite_code">{{ _("Invite Code") }}:</label>
+<input id="invite_code" type="text" autocomplete="off" readonly value="{{ frappe.form_dict.get('invite_code', '') | e }}">
+</form>
+<a href="/login">{{ _("Go to sign in") }}</a>
+</main></body></html>

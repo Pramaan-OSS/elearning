@@ -1,0 +1,9 @@
+eLearning is a learning management system template published by Pramaan OSS.
+
+Built on Frappe Learning (https://github.com/frappe/lms), by Frappe Technologies
+Pvt Ltd and contributors, licensed AGPL-3.0. The original licence text and
+copyright notices are preserved in LICENSE-ORIGINAL. This template is licensed
+AGPL-3.0; see LICENSE.
+
+The shared UI package in vendor/framework/ui comes from the Frappe framework
+("frappe/ui"), AGPL-3.0, by Frappe Technologies Pvt Ltd and contributors.

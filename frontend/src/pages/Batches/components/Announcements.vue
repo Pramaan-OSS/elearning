@@ -1,0 +1,58 @@
+<template>
+	<div class="w-[90%] lg:w-[75%] mx-auto mt-5">
+		<h2 class="text-ink-gray-9 text-lg-semibold mb-5">
+			{{ __('Announcements') }}
+		</h2>
+		<ul v-if="communications.data?.length" class="list-none">
+			<li v-for="comm in communications.data" :key="comm.name">
+				<div class="mb-8">
+					<div class="flex items-center justify-between mb-2">
+						<div class="flex items-center">
+							<Avatar :label="comm.sender_full_name" size="lg" />
+							<div class="ms-2 text-ink-gray-7">
+								{{ comm.sender_full_name }}
+							</div>
+						</div>
+						<div class="text-sm">
+							{{ timeAgo(comm.communication_date) }}
+						</div>
+					</div>
+					<div
+						class="prose prose-sm bg-surface-sidebar !min-w-full px-4 py-2 rounded-5"
+						v-safe-html:rich="comm.content"
+					></div>
+				</div>
+			</li>
+		</ul>
+		<div v-else class="text-ink-gray-7 leading-5">
+			{{ __('No announcements have been made yet for this batch') }}
+		</div>
+	</div>
+</template>
+<script setup>
+import { createResource, Avatar } from 'frappe-ui'
+import { timeAgo } from '@/utils'
+
+const props = defineProps({
+	batch: {
+		type: Object,
+		required: true,
+	},
+})
+
+const communications = createResource({
+	url: 'lms.lms.api.get_announcements',
+	makeParams(value) {
+		return {
+			batch: props.batch.data?.name,
+		}
+	},
+	auto: true,
+	cache: ['announcement', props.batch],
+})
+</script>
+<style>
+.prose-sm p {
+	margin: 0 0 0.5rem;
+}
+</style>

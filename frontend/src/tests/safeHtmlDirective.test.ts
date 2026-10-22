@@ -1,0 +1,117 @@
+import { describe, expect, it, vi } from 'vitest'
+import { mount } from '@vue/test-utils'
+import safeHtml from '../directives/safeHtml'
+
+const mountAt = (level: string | null, html: string) =>
+	mount(
+		{
+			template: level
+				? `<div v-safe-html:${level}="html" />`
+				: '<div v-safe-html="html" />',
+			props: { html: String },
+		},
+		{ props: { html }, global: { directives: { 'safe-html': safeHtml } } }
+	)
+
+describe('v-safe-html', () => {
+	it('strips script tags and inline handlers at every level', () => {
+		for (const level of ['rich', 'basic', 'bio']) {
+			const html = mountAt(
+				level,
+				'<img src=x onerror=alert(1)><script>alert(1)</script>'
+			).html()
+			expect(html, level).not.toContain('onerror')
+			expect(html, level).not.toContain('<script')
+		}
+	})
+
+	it('rich keeps presentational markup but drops form elements', () => {
+		const html = mountAt(
+			'rich',
+			'<div class="a"><p>hi</p><input name="x"></div>'
+		).html()
+		expect(html).toContain('<p>hi</p>')
+		expect(html).toContain('class="a"')
+		expect(html).not.toContain('<input')
+	})
+
+	it('basic keeps tables, bio does not', () => {
+		expect(
+			mountAt('basic', '<table><tr><td>c</td></tr></table>').html()
+		).toContain('<td>')
+		expect(
+			mountAt('bio', '<table><tr><td>c</td></tr></table>').html()
+		).not.toContain('<td>')
+	})
+
+	it('bio drops headings that basic keeps', () => {
+		expect(mountAt('basic', '<h2>t</h2>').html()).toContain('<h2>')
+		expect(mountAt('bio', '<h2>t</h2>').html()).not.toContain('<h2>')
+	})
+
+	it('an absent level falls back to the strictest profile, not the loosest', () => {
+		const warned = vi.spyOn(console, 'warn').mockImplementation(() => {})
+		const html = mountAt(
+			null,
+			'<table><tr><td>c</td></tr></table><h2>t</h2>'
+		).html()
+		expect(html).not.toContain('<td>')
+		expect(html).not.toContain('<h2>')
+		expect(warned).toHaveBeenCalledWith(
+			expect.stringContaining('level "(none)" is not one of')
+		)
+	})
+
+	it('an unknown level falls back to the strictest profile', () => {
+		const warned = vi.spyOn(console, 'warn').mockImplementation(() => {})
+		expect(mountAt('nonsense', '<h2>t</h2>').html()).not.toContain('<h2>')
+		expect(warned).toHaveBeenCalledWith(
+			expect.stringContaining('level "nonsense" is not one of')
+		)
+	})
+
+	it('forces safe anchor rel/target at every level', () => {
+		for (const level of ['rich', 'basic', 'bio']) {
+			const html = mountAt(level, '<a href="https://e.com">x</a>').html()
+			expect(html, level).toContain('rel="noopener noreferrer"')
+			expect(html, level).toContain('target="_blank"')
+		}
+	})
+
+	it('re-sanitizes on update, not only on mount', async () => {
+		const wrapper = mountAt('rich', '<p>safe</p>')
+		await wrapper.setProps({ html: '<img src=x onerror=alert(1)>' })
+		expect(wrapper.html()).not.toContain('onerror')
+	})
+})
+
+const sources = import.meta.glob('../**/*.vue', {
+	query: '?raw',
+	import: 'default',
+	eager: true,
+}) as Record<string, string>
+
+const HTML_COMMENT = /<!--[\s\S]*?-->/g
+const live = (src: string) => src.replace(HTML_COMMENT, '')
+
+// Raw v-html, bound innerHTML props and bare target="_blank" are banned by
+// .github/semgrep/vue-directives.yml. The level check is not.
+describe('every v-safe-html names a known level', () => {
+	it('finds components to scan', () => {
+		expect(Object.keys(sources).length).toBeGreaterThan(50)
+	})
+
+	it('finds no v-safe-html without an explicit known level', () => {
+		const KNOWN = ['rich', 'basic', 'bio']
+		const offenders: string[] = []
+		for (const [path, src] of Object.entries(sources)) {
+			for (const [match, arg] of live(src).matchAll(
+				/\sv-safe-html(?::([a-z]+))?=/g
+			)) {
+				if (!arg || !KNOWN.includes(arg))
+					offenders.push(`${path} ${match.trim()}`)
+			}
+		}
+		expect(offenders, offenders.join('\n')).toEqual([])
+	})
+})

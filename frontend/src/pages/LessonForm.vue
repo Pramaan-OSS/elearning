@@ -1,0 +1,1023 @@
+<template>
+	<div ref="formRef" class="py-6 sm:py-10">
+		<div class="mx-0 space-y-6 px-4 sm:mx-10 sm:px-20">
+			<button
+				v-if="isMobile"
+				type="button"
+				class="inline-flex h-9 items-center gap-1.5 rounded-full border border-outline-gray-2 px-3.5 text-p-sm-medium text-ink-gray-7 hover:bg-surface-gray-2"
+				@click="showLessonDetails = true"
+			>
+				<span class="lucide-pencil size-3.5" />
+				{{ __('Lesson details') }}
+			</button>
+
+			<div v-else class="flex items-center justify-between gap-3">
+				<div class="flex items-center gap-3">
+					<Switch
+						v-model="lesson.include_in_preview"
+						:aria-labelledby="previewLabelId"
+						@update:modelValue="markDirty"
+					/>
+					<div class="flex items-center gap-1.5">
+						<span
+							:id="previewLabelId"
+							class="text-p-base font-medium text-ink-gray-8"
+						>
+							{{ __('Include in preview') }}
+						</span>
+						<Tooltip
+							:text="
+								__(
+									'When on, anyone can preview this lesson without enrolling. Otherwise it is visible only to enrolled students.'
+								)
+							"
+						>
+							<span
+								class="lucide-help-circle size-4 shrink-0 text-ink-gray-5"
+							/>
+						</Tooltip>
+					</div>
+				</div>
+			</div>
+
+			<BottomSheet v-model="showLessonDetails" :title="__('Lesson details')">
+				<div class="px-3 pb-2">
+					<div class="flex items-start justify-between gap-4 py-3">
+						<div class="min-w-0">
+							<div
+								:id="previewSheetLabelId"
+								class="text-p-base font-medium text-ink-gray-8"
+							>
+								{{ __('Include in preview') }}
+							</div>
+							<p class="mt-0.5 text-p-sm text-ink-gray-6">
+								{{
+									__(
+										'When on, anyone can preview this lesson without enrolling. Otherwise it is visible only to enrolled students.'
+									)
+								}}
+							</p>
+						</div>
+						<Switch
+							v-model="lesson.include_in_preview"
+							:aria-labelledby="previewSheetLabelId"
+							class="shrink-0"
+							@update:modelValue="markDirty"
+						/>
+					</div>
+				</div>
+			</BottomSheet>
+
+			<textarea
+				ref="titleRef"
+				v-model="lesson.title"
+				:placeholder="__('Lesson title')"
+				:aria-label="__('Lesson title')"
+				rows="1"
+				class="lesson-title block w-full resize-none overflow-hidden border-0 bg-transparent p-0 text-2xl font-bold leading-tight text-ink-gray-9 placeholder:text-ink-gray-4 focus:outline-none"
+				:class="
+					titleKeyboardFocus
+						? 'focus:ring-2 focus:ring-outline-gray-5'
+						: 'focus:ring-0'
+				"
+				@input="onTitleInput"
+				@focus="titleKeyboardFocus = lastInputWasKeyboard"
+				@keydown.enter="onTitleEnter"
+				@blur="onTitleBlur"
+			/>
+
+			<div
+				v-if="user.data?.is_moderator || user.data?.is_instructor"
+				class="flex flex-wrap items-center gap-2"
+			>
+				<Button
+					size="sm"
+					variant="subtle"
+					@click="openTranslateDialog()"
+				>
+					<template #prefix>
+						<span class="lucide-languages size-4" />
+					</template>
+					{{ __('Translate draft') }}
+				</Button>
+				<Button
+					v-if="settings.data?.lesson_media_transcription"
+					size="sm"
+					variant="subtle"
+					@click="openTranscribeDialog()"
+				>
+					<template #prefix>
+						<span class="lucide-audio-lines size-4" />
+					</template>
+					{{ __('Transcribe media') }}
+				</Button>
+			</div>
+
+			<Dialog
+				v-model:open="authorHelp.open"
+				:title="authorHelp.title"
+			>
+				<template #default>
+					<div v-if="authorHelp.mode === 'translate'" class="space-y-3">
+						<FormControl
+							v-model="translateLanguage"
+							type="text"
+							:label="__('Translate into (for example en, de, pt-br)')"
+						/>
+						<p v-if="authorHelp.error" class="text-p-sm text-ink-red-6">
+							{{ authorHelp.error }}
+						</p>
+					</div>
+					<div v-else-if="authorHelp.mode === 'pick'" class="space-y-2">
+						<p class="text-p-sm text-ink-gray-6">
+							{{ __('Which file should be transcribed?') }}
+						</p>
+						<button
+							v-for="url in authorHelp.mediaUrls"
+							:key="url"
+							class="block w-full truncate rounded border border-outline-gray-2 px-3 py-2 text-start text-p-sm text-ink-gray-8 hover:bg-surface-gray-1"
+							@click="runTranscription(url)"
+						>
+							{{ url.split('/').pop() }}
+						</button>
+					</div>
+					<div v-else class="space-y-3">
+						<p
+							v-if="authorHelp.error"
+							class="text-p-sm text-ink-red-6"
+						>
+							{{ authorHelp.error }}
+						</p>
+						<p
+							v-else-if="authorHelp.busy"
+							class="text-p-sm text-ink-gray-6"
+						>
+							{{ __('Working. This can take a minute.') }}
+						</p>
+						<p
+							v-else-if="authorHelp.text"
+							class="max-h-72 overflow-auto whitespace-pre-wrap text-p-sm text-ink-gray-8"
+							data-testid="author-help-text"
+						>
+							{{ authorHelp.text }}
+						</p>
+					</div>
+				</template>
+				<template #actions>
+					<Button
+						v-if="authorHelp.mode === 'translate'"
+						variant="solid"
+						@click="submitTranslate()"
+					>
+						{{ __('Translate') }}
+					</Button>
+					<Button
+						v-if="authorHelp.text"
+						variant="solid"
+						@click="copyAuthorHelpText()"
+					>
+						{{ __('Copy text') }}
+					</Button>
+					<Button variant="subtle" @click="authorHelp.open = false">
+						{{ __('Close') }}
+					</Button>
+				</template>
+			</Dialog>
+
+			<details
+				class="instructor-notes rounded-6 border border-outline-gray-2"
+				@toggle="onInstructorNotesToggle"
+			>
+				<summary
+					class="flex w-full cursor-pointer items-center gap-2 px-4 py-3 text-start"
+				>
+					<NotebookPen class="size-4 stroke-1.5 text-ink-gray-7" />
+					<span class="text-p-base font-medium text-ink-gray-8">
+						{{ __('Instructor notes') }}
+					</span>
+					<Badge
+						variant="subtle"
+						theme="gray"
+						size="sm"
+						:label="__('private')"
+					/>
+					<ChevronRight
+						class="instructor-notes-chevron ms-auto size-4 text-ink-gray-5"
+					/>
+				</summary>
+				<BlockEditor
+					ref="instructorEditor"
+					class="instructor-notes-editor border-t border-outline-gray-2 py-3"
+					:uploadContext="instructorUploadContext"
+					@change="markDirty"
+				/>
+			</details>
+
+			<BlockEditor
+				ref="editor"
+				:uploadContext="contentUploadContext"
+				@change="markDirty"
+			/>
+		</div>
+	</div>
+</template>
+<script setup>
+// The title textarea is `block` because a textarea is inline-block by default,
+// so it would sit on the parent's line box and carry its descender — 5px of
+// space under the title belonging to no rule and no gap.
+import {
+	Badge,
+	Button,
+	Dialog,
+	FormControl,
+	Switch,
+	call,
+	createResource,
+	toast,
+	Tooltip,
+} from 'frappe-ui'
+import {
+	reactive,
+	computed,
+	onMounted,
+	inject,
+	ref,
+	nextTick,
+	onBeforeUnmount,
+	useId,
+} from 'vue'
+import { ChevronRight, NotebookPen } from 'lucide-vue-next'
+import { useDebounceFn, useEventListener } from '@vueuse/core'
+import { enablePlyr, sanitizeEditorJs } from '@/utils'
+import {
+	hasEditorContent,
+	parseStoredEditorJs,
+	shouldSkipLessonSave,
+	toSingleLineTitle,
+} from '@/utils/lessonForm'
+import { convertBodyToBlocks as convertToJSON } from '@/utils/lessonMacros'
+import { resourceErrorMessage, submitResource } from '@/utils/resource'
+import { hasVideoContent } from '@/utils/video'
+import {
+	mediaUrlsFromBlocks,
+	plainTextFromBlocks,
+} from '@/utils/lessonText'
+import BlockEditor from '@/components/BlockEditor.vue'
+import BottomSheet from '@/components/BottomSheet.vue'
+import { useScreenSize } from '@/utils/composables'
+import { useOnboarding } from '@framework/ui/components/Onboarding/index'
+import {
+	useKeyboardShortcuts,
+	saveShortcut,
+} from '@/composables/useKeyboardShortcuts'
+
+const { isMobile } = useScreenSize()
+const showLessonDetails = ref(false)
+const previewLabelId = useId()
+const previewSheetLabelId = useId()
+
+const editor = ref(null)
+const instructorEditor = ref(null)
+const user = inject('$user')
+const titleRef = ref(null)
+// Text fields always match :focus-visible, even on click, so the ring follows
+// the input that led to the focus: a key (Tab, or Enter on "Add Lesson") shows it.
+const titleKeyboardFocus = ref(false)
+let lastInputWasKeyboard = false
+useEventListener(
+	document,
+	'keydown',
+	(e) => {
+		if (!e.metaKey && !e.ctrlKey && !e.altKey) lastInputWasKeyboard = true
+	},
+	true
+)
+useEventListener(
+	document,
+	'pointerdown',
+	() => (lastInputWasKeyboard = false),
+	true
+)
+const formRef = ref(null)
+
+// A lesson title is one line. The field stays a textarea so a long title wraps
+// and grows; only the explicit break is refused.
+function onTitleEnter(event) {
+	// Enter also confirms an IME candidate. Never swallow that one.
+	if (event.isComposing) return
+	event.preventDefault()
+}
+
+function onTitleInput() {
+	// Enter is refused on keydown, but a paste or a drop can still carry breaks.
+	lesson.title = toSingleLineTitle(lesson.title)
+	autoGrowTitle()
+	markDirty({ fromTitle: true })
+}
+
+function onTitleBlur() {
+	titleKeyboardFocus.value = false
+	if (isDraft.value) createDraftLesson()
+}
+
+// EditorJS can't focus while the card is collapsed (display:none).
+function onInstructorNotesToggle(event) {
+	if (event.target.open) instructorEditor.value?.focus()
+}
+
+function autoGrowTitle() {
+	const el = titleRef.value
+	if (!el) return
+	el.style.height = 'auto'
+	el.style.height = `${el.scrollHeight}px`
+}
+
+// reactive so the upload block picks up `docname` once the lesson is saved.
+const contentUploadContext = reactive({ docname: null, fieldname: 'content' })
+const instructorUploadContext = reactive({
+	docname: null,
+	fieldname: 'instructor_content',
+})
+const { updateOnboardingStep } = useOnboarding('learning')
+
+const emit = defineEmits(['saved', 'created'])
+
+// True after initial render, so render()'s onChange doesn't autosave.
+let initialLoadComplete = false
+
+// An unreadable field renders as empty, which looks exactly like a lesson with
+// no body, so foldEditorData holds it back and writes it home unchanged.
+// Per field: unreadable notes must not stop the author fixing the body.
+const unreadable = reactive({ content: false, instructor_content: false })
+
+const unreadableLabels = () =>
+	[
+		unreadable.content && __('Content'),
+		unreadable.instructor_content && __('Instructor Notes'),
+	].filter(Boolean)
+
+// What the last toast said, rather than a boolean. The fields resolve
+// independently, so a warning naming only Content must not suppress the later
+// one that also names the notes.
+let warnedAbout = ''
+
+function markUnreadable(field) {
+	unreadable[field] = true
+}
+
+function warnUnreadable() {
+	const fields = unreadableLabels().join(', ')
+	if (!fields || warnedAbout === fields) return
+	warnedAbout = fields
+	toast.error(__('Lesson content could not be read'), {
+		description: __(
+			'The stored {0} of this lesson could not be read, so the editor is showing it as empty. It is left untouched and will not be overwritten; anything else you edit still saves. Reload the page; if it still fails, restore the lesson from its version history in Desk.'
+		).format(fields),
+	})
+}
+
+const props = defineProps({
+	courseName: {
+		type: String,
+		required: true,
+	},
+	chapterNumber: {
+		type: String,
+		required: true,
+	},
+	lessonNumber: {
+		type: String,
+		required: true,
+	},
+	// A new lesson for this chapter (docname), created once its title is typed.
+	draftChapter: {
+		type: String,
+		default: '',
+	},
+})
+
+// Read once: the parent swaps the props to the created lesson's without
+// remounting, and that must not turn this form back into a draft.
+const draftChapter = props.draftChapter
+const isDraft = ref(Boolean(draftChapter))
+
+const isDirty = ref(false)
+
+// Author assistance: translation and, when enabled, media transcription.
+// Both return text for the author to review and copy; nothing is written
+// back into the lesson automatically.
+// The optional transcription flag rides the public settings payload; the
+// store is not needed here, and some lesson tests mount without a Pinia.
+const settings = createResource({
+	url: 'lms.lms.api.get_lms_settings',
+	auto: true,
+	cache: 'LMS Settings',
+})
+const translateLanguage = ref('')
+const authorHelp = reactive({
+	open: false,
+	mode: 'result',
+	title: '',
+	text: '',
+	error: '',
+	busy: false,
+	mediaUrls: [],
+})
+
+const currentBlocks = () => {
+	try {
+		return JSON.parse(lesson.content || '{}').blocks || []
+	} catch {
+		return []
+	}
+}
+
+const openTranslateDialog = () => {
+	authorHelp.open = true
+	authorHelp.mode = 'translate'
+	authorHelp.title = __('Translate draft')
+	authorHelp.text = ''
+	authorHelp.error = ''
+	authorHelp.busy = false
+	authorHelp.mediaUrls = []
+}
+
+const openTranscribeDialog = () => {
+	const urls = mediaUrlsFromBlocks(currentBlocks())
+	if (!urls.length) {
+		authorHelp.open = true
+		authorHelp.mode = 'result'
+		authorHelp.title = __('Transcribe media')
+		authorHelp.text = ''
+		authorHelp.error = __(
+			'This lesson has no audio or video of its own to transcribe.'
+		)
+		authorHelp.busy = false
+		authorHelp.mediaUrls = []
+		return
+	}
+	if (urls.length === 1) {
+		runTranscription(urls[0])
+		return
+	}
+	authorHelp.open = true
+	authorHelp.mode = 'pick'
+	authorHelp.title = __('Transcribe media')
+	authorHelp.text = ''
+	authorHelp.error = ''
+	authorHelp.busy = false
+	authorHelp.mediaUrls = urls
+}
+
+const runAuthorCall = async (url, params) => {
+	authorHelp.open = true
+	authorHelp.busy = true
+	authorHelp.error = ''
+	authorHelp.text = ''
+	try {
+		const result = await call(url, params)
+		authorHelp.busy = false
+		authorHelp.text = result?.text || ''
+		if (!authorHelp.text) {
+			authorHelp.error = __('The answer came back empty. Please try again.')
+		}
+	} catch (error) {
+		authorHelp.busy = false
+		authorHelp.error =
+			error?.messages?.[0] ||
+			__('This is not available right now. Please try again later.')
+	}
+}
+
+async function submitTranslate() {
+	if (!translateLanguage.value.trim()) {
+		authorHelp.error = __('Give a language like en, de or pt-br.')
+		return
+	}
+	authorHelp.mode = 'result'
+	authorHelp.title = __('Translate draft')
+	await runAuthorCall('lms.lms.author_tools.translate_content', {
+		content: plainTextFromBlocks(currentBlocks()).slice(0, 5000),
+		target_language: translateLanguage.value,
+	})
+}
+
+const copyAuthorHelpText = () => {
+	navigator.clipboard?.writeText(authorHelp.text).then(() => {
+		toast.success(__('Copied. Paste it where you review your drafts.'))
+	})
+}
+
+const runTranscription = (fileUrl) => {
+	authorHelp.mode = 'result'
+	authorHelp.title = __('Transcribe media')
+	authorHelp.busy = true
+	return runAuthorCall('lms.lms.author_tools.transcribe_media', {
+		file_url: fileUrl,
+	})
+}
+
+// Set once the Course Lesson exists. Its Lesson Reference is a second request,
+// and a retry after that one fails must link this lesson, not create another.
+const createdLesson = ref(null)
+let isUnmounting = false
+let lessonDeleted = false
+function markDeleted() {
+	lessonDeleted = true
+}
+
+const autoSave = useDebounceFn(() => {
+	if (lessonDeleted) return
+	if (isDirty.value && lessonDetails.data?.lesson) saveLesson()
+}, 800)
+
+function markDirty({ fromTitle = false } = {}) {
+	if (lessonDeleted) return
+	if (isDraft.value) return markDraftDirty(fromTitle)
+	if (!lessonDetails.data?.lesson) return
+	// render() fires onChange; gate non-title saves until loaded.
+	if (!fromTitle && !initialLoadComplete) return
+	isDirty.value = true
+	// Capture block data now so a later flush persists latest, not stale.
+	if (!fromTitle) captureEditors()
+	autoSave()
+}
+
+defineExpose({
+	submitTranslate,
+	saveLesson,
+	markDeleted,
+	isDirty,
+	lessonHasVideo: () => lessonHasVideo.value,
+	lessonName: () => lessonDetails.data?.lesson?.name,
+	lessonTitle: () => lesson.title,
+})
+
+onMounted(() => {
+	if (!user.data?.is_moderator && !user.data?.is_instructor) {
+		window.location.href = '/login'
+	}
+	enablePlyr()
+	if (isDraft.value) openDraft()
+})
+
+// A draft has nothing to load: arm the editors once they are ready and put the
+// caret in the title. Focus again after the editors settle, unless the author
+// has already moved on, in case closing the mobile outline sheet took it.
+function openDraft() {
+	titleRef.value?.focus()
+	Promise.all([
+		editor.value?.isReady(),
+		instructorEditor.value?.isReady(),
+	]).then(() => {
+		initialLoadComplete = true
+		if (!formRef.value?.contains(document.activeElement)) {
+			titleRef.value?.focus()
+		}
+	})
+}
+
+// Before the lesson exists, body edits are only captured; the title schedules
+// the create. The first save after the create writes the captured edits.
+function markDraftDirty(fromTitle) {
+	if (fromTitle) return createDraftAfterIdle()
+	if (!initialLoadComplete) return
+	isDirty.value = true
+	captureEditors()
+}
+
+const createLessonResource = createResource({
+	url: 'lms.lms.api.create_lesson',
+	makeParams: (values) => values,
+})
+
+// Guards the one create: idle ticks, blur and Ctrl+S during the request must
+// not insert a second lesson. Cleared only when the request fails.
+let creatingDraft = false
+let createdTitle = ''
+
+const createDraftAfterIdle = useDebounceFn(() => createDraftLesson(), 3000)
+
+function createDraftLesson({ flush = false } = {}) {
+	if (!isDraft.value || creatingDraft || lessonDeleted) return
+	if (isUnmounting && !flush) return
+	const title = lesson.title.trim()
+	if (!title) return
+	creatingDraft = true
+	createdTitle = title
+	return submitResource(
+		createLessonResource,
+		{ chapter: draftChapter, title },
+		{
+			onSuccess: promoteDraft,
+			onError(err) {
+				creatingDraft = false
+				toast.error(resourceErrorMessage(err))
+			},
+		}
+	)
+}
+
+// The form stays mounted, so the title keeps its focus and caret. From here on
+// it is an ordinary lesson and saves through the 800 ms autosave.
+function promoteDraft(name) {
+	isDraft.value = false
+	lessonDetails.data = {
+		chapter: { name: draftChapter },
+		lesson: { name, title: createdTitle },
+	}
+	contentUploadContext.docname = name
+	instructorUploadContext.docname = name
+	emit('created', { name, chapter: draftChapter })
+	// Typed while the create was in flight.
+	if (lesson.title.trim() !== createdTitle) isDirty.value = true
+	if (!isDirty.value) return
+	if (isUnmounting) saveLesson({ flush: true })
+	else autoSave()
+}
+
+// ignoreTyping:false enables Ctrl+S in title; guard spares ProseMirror.
+useKeyboardShortcuts({
+	ignoreTyping: false,
+	shortcuts: [
+		{
+			...saveShortcut(() => saveLesson()),
+			guard: (e) => !e.target?.classList?.contains('ProseMirror'),
+		},
+	],
+})
+
+const lesson = reactive({
+	title: '',
+	include_in_preview: false,
+	body: '',
+	instructor_notes: '',
+	content: '',
+})
+
+const lessonHasVideo = computed(() => hasVideoContent(lesson))
+
+const lessonDetails = createResource({
+	url: 'lms.lms.utils.get_lesson_creation_details',
+	params: {
+		course: props.courseName,
+		chapter: props.chapterNumber,
+		lesson: props.lessonNumber,
+	},
+	auto: !isDraft.value,
+	onSuccess(data) {
+		if (data.lesson) {
+			unreadable.content = false
+			unreadable.instructor_content = false
+			warnedAbout = ''
+			Object.keys(data.lesson).forEach((key) => {
+				lesson[key] = data.lesson[key]
+			})
+			// Titles saved before Enter was refused still hold breaks.
+			lesson.title = toSingleLineTitle(lesson.title)
+			lesson.include_in_preview = data?.lesson?.include_in_preview
+				? true
+				: false
+			contentUploadContext.docname = data.lesson.name
+			instructorUploadContext.docname = data.lesson.name
+			nextTick(autoGrowTitle)
+			Promise.all([addLessonContent(data), addInstructorNotes(data)]).then(
+				() => {
+					nextTick(() => {
+						// Loaded content isn't user input; arm autosave after render.
+						isDirty.value = false
+						initialLoadComplete = true
+						// An empty lesson focuses the title so it can be named (and so
+						// the block editor doesn't grab the caret out from under the
+						// title). Lessons with a body focus the body for editing.
+						if (!data.lesson.content && !data.lesson.body) {
+							titleRef.value?.focus()
+						} else {
+							editor.value?.focus()
+						}
+					})
+				}
+			)
+		}
+	},
+})
+
+const addLessonContent = (data) => {
+	// Editor can unmount mid-load; render() on a null ref throws.
+	if (!editor.value) return Promise.resolve()
+	// Return render promise so callers wait for blocks in DOM.
+	return editor.value.isReady().then(() => {
+		if (!editor.value) return
+		if (data.lesson.content) {
+			const stored = parseStoredEditorJs(data.lesson.content)
+			// Throwing here abandons the rest of the load chain, leaving the form
+			// permanently un-loaded, and the notes editor's edits with it.
+			if (!stored) return markUnreadable('content')
+			return editor.value.render(sanitizeEditorJs(stored))
+		} else if (data.lesson.body) {
+			let blocks = convertToJSON(data.lesson)
+			return editor.value.render({
+				blocks: blocks,
+			})
+		}
+	})
+}
+
+const addInstructorNotes = (data) => {
+	if (!instructorEditor.value) return Promise.resolve()
+	return instructorEditor.value.isReady().then(() => {
+		if (!instructorEditor.value) return
+		if (data.lesson.instructor_content) {
+			const stored = parseStoredEditorJs(data.lesson.instructor_content)
+			if (!stored) return markUnreadable('instructor_content')
+			return instructorEditor.value.render(sanitizeEditorJs(stored))
+		} else if (data.lesson.instructor_notes) {
+			let blocks = convertToJSON(data.lesson)
+			return instructorEditor.value.render({
+				blocks: blocks,
+			})
+		}
+	})
+}
+
+onBeforeUnmount(() => {
+	isUnmounting = true
+	// Flush unsaved edits before teardown; skip if deleted.
+	if (lessonDeleted) return
+	if (isDraft.value) {
+		// Read the editors before they are destroyed; the create writes them after.
+		if (initialLoadComplete) captureEditors()
+		createDraftLesson({ flush: true })
+		return
+	}
+	if (isDirty.value && lessonDetails.data?.lesson) saveLesson({ flush: true })
+})
+
+const newLessonResource = createResource({
+	url: 'frappe.client.insert',
+	makeParams(values) {
+		return {
+			doc: {
+				doctype: 'Course Lesson',
+				course: props.courseName,
+				chapter: lessonDetails.data?.chapter.name,
+				...lesson,
+			},
+		}
+	},
+})
+
+const editLesson = createResource({
+	url: 'frappe.client.set_value',
+	makeParams(values) {
+		return {
+			doctype: 'Course Lesson',
+			name: values.lesson,
+			fieldname: lesson,
+		}
+	},
+})
+
+const lessonReference = createResource({
+	url: 'frappe.client.insert',
+	makeParams(values) {
+		return {
+			doc: {
+				doctype: 'Lesson Reference',
+				parent: lessonDetails.data?.chapter.name,
+				parenttype: 'Course Chapter',
+				parentfield: 'lessons',
+				lesson: values.lesson,
+				idx: props.lessonNumber,
+			},
+		}
+	},
+})
+
+// Stored body has real content? Lets title-only edits skip re-serialising.
+const storedContentHasBody = () => {
+	return hasEditorContent(parseStoredEditorJs(lesson.content))
+}
+
+// Editor destroyed mid-save can reject; degrade to null so persist still runs.
+const serialise = (ed) =>
+	ed ? Promise.resolve(ed.save()).catch(() => null) : Promise.resolve(null)
+
+// Fold serialised editor output into lesson; return whether body has content.
+const foldEditorData = (bodyData, notesData) => {
+	// Editor gone or empty: keep stored content so we don't wipe the body.
+	let bodyHasContent = storedContentHasBody()
+	if (bodyData && !unreadable.content) {
+		bodyData = removeEmptyBlocks(bodyData)
+		bodyHasContent = hasEditorContent(bodyData)
+		if (bodyHasContent) lesson.content = JSON.stringify(bodyData)
+	}
+
+	// Fold notes only after load, else the empty default wipes stored notes.
+	if (initialLoadComplete && notesData && !unreadable.instructor_content) {
+		notesData = removeEmptyBlocks(notesData)
+		lesson.instructor_content = JSON.stringify(notesData)
+		// Clear legacy field so removed notes don't reappear via fallback.
+		lesson.instructor_notes = ''
+	}
+
+	return bodyHasContent
+}
+
+// Serialise live editors into lesson on @change, before any teardown race.
+const captureEditors = async () => {
+	if (lessonDeleted) return
+	const [bodyData, notesData] = await Promise.all([
+		serialise(editor.value),
+		serialise(instructorEditor.value),
+	])
+	foldEditorData(bodyData, notesData)
+}
+
+function saveLesson({ flush = false } = {}) {
+	if (isDraft.value) return createDraftLesson({ flush })
+	// foldEditorData skips unreadable fields, so `lesson` still holds their stored
+	// strings and the write puts them back unchanged rather than blanking them.
+	warnUnreadable()
+
+	// Both serialise() calls are made before either is awaited, so the editors
+	// are read before unmount destroys them.
+	Promise.all([
+		serialise(editor.value),
+		serialise(instructorEditor.value),
+	]).then(([bodyData, notesData]) => persistLesson(bodyData, notesData, flush))
+}
+
+function persistLesson(bodyData, notesData, flush) {
+	const bodyHasContent = foldEditorData(bodyData, notesData)
+
+	// Nothing to save: no title, no body.
+	if (shouldSkipLessonSave(lesson.title, bodyHasContent)) return
+
+	// During teardown only an explicit flush may persist.
+	if (isUnmounting && !flush) return
+	if (lessonDeleted) return
+	if (lessonDetails.data?.lesson) {
+		editCurrentLesson()
+	} else {
+		createNewLesson()
+	}
+}
+
+const removeEmptyBlocks = (outputData) => {
+	let blocks = outputData.blocks.filter((block) => {
+		return Object.keys(block.data).length > 0 || block.type == 'paragraph'
+	})
+	outputData.blocks = blocks
+	return outputData
+}
+
+// submitResource, not a bare submit(): createResource rethrows after onError, so
+// a validation failure or a 500 left a rejected promise nobody handled. It also
+// awaits the chained reference insert, so the create only settles once the
+// lesson is actually in a chapter.
+const createNewLesson = () => {
+	// A previous attempt created the lesson and failed on the reference; another
+	// insert would leave a second, orphaned lesson behind. Reuse that one, saving
+	// the title the user may have edited before retrying.
+	if (createdLesson.value) {
+		return submitResource(
+			editLesson,
+			{ lesson: createdLesson.value },
+			{
+				validate: validateLesson,
+				onSuccess: () => linkLesson(createdLesson.value),
+				onError(err) {
+					toast.error(resourceErrorMessage(err))
+				},
+			}
+		)
+	}
+	return submitResource(
+		newLessonResource,
+		{},
+		{
+			validate: validateLesson,
+			onSuccess(data) {
+				createdLesson.value = data.name
+				return linkLesson(data.name)
+			},
+			onError(err) {
+				toast.error(resourceErrorMessage(err))
+			},
+		}
+	)
+}
+
+const linkLesson = (lessonName) =>
+	submitResource(
+		lessonReference,
+		{ lesson: lessonName },
+		{
+			onSuccess() {
+				if (user.data?.is_system_manager)
+					updateOnboardingStep('create_first_lesson')
+
+				toast.success(__('Lesson created successfully'))
+				isDirty.value = false
+				emit('saved', { isNew: true })
+				lessonDetails.reload()
+			},
+			// The reference insert had no handler at all: it failed silently, and
+			// the lesson stayed out of the chapter with nothing said about it.
+			onError(err) {
+				toast.error(resourceErrorMessage(err))
+			},
+		}
+	)
+
+const editCurrentLesson = (isRetry = false) => {
+	// Catch the re-thrown rejection: a save racing a delete 404s harmlessly.
+	editLesson
+		.submit(
+			{
+				lesson: lessonDetails.data.lesson.name,
+			},
+			{
+				validate() {
+					return validateLesson()
+				},
+				onSuccess() {
+					isDirty.value = false
+					emit('saved', {
+						name: lessonDetails.data.lesson.name,
+						title: lesson.title,
+						include_in_preview: lesson.include_in_preview,
+						isNew: false,
+					})
+				},
+			}
+		)
+		.catch((err) => {
+			if (lessonDeleted) return
+			// The daily untitled-lesson rename can move the docname under an open
+			// editor; re-resolve it by index and retry once (a plain reload would
+			// drop the unsaved edits we're saving).
+			if (!isRetry && err?.exc_type === 'DoesNotExistError') {
+				resolveLessonName().then((name) => {
+					if (name) editCurrentLesson(true)
+					else toast.error(err.messages?.[0] || err.message || err)
+				})
+				return
+			}
+			toast.error(err.messages?.[0] || err.message || err)
+		})
+}
+
+const resolveLessonName = () =>
+	call('lms.lms.utils.get_lesson_creation_details', {
+		course: props.courseName,
+		chapter: props.chapterNumber,
+		lesson: props.lessonNumber,
+	})
+		.then((data) => {
+			const name = data?.lesson?.name
+			if (name) {
+				lessonDetails.data.lesson.name = name
+				contentUploadContext.docname = name
+				instructorUploadContext.docname = name
+			}
+			return name || null
+		})
+		.catch(() => null)
+
+const validateLesson = () => {
+	if (!lesson.title) {
+		return 'Title is required'
+	}
+}
+</script>
+<style>
+/* Drop the default disclosure marker; rotate chevron via [open]. */
+.instructor-notes > summary {
+	list-style: none;
+}
+.instructor-notes > summary::-webkit-details-marker {
+	display: none;
+}
+.instructor-notes-chevron {
+	transition: transform 200ms;
+}
+.instructor-notes[open] .instructor-notes-chevron {
+	transform: rotate(90deg);
+}
+[dir='rtl'] .instructor-notes:not([open]) .instructor-notes-chevron {
+	transform: rotate(180deg);
+}
+
+/* Indent so EditorJS's left-gutter controls stay inside the card. */
+.instructor-notes-editor .ce-block__content,
+.instructor-notes-editor .ce-toolbar__content {
+	margin-inline-start: 4.5rem;
+}
+
+/* Lift instructor editor so its + menu paints above the content editor. */
+.instructor-notes-editor .codex-editor {
+	z-index: 2;
+}
+</style>

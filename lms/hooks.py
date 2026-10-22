@@ -1,0 +1,405 @@
+import frappe
+
+from . import __version__ as app_version
+
+app_name = "frappe_lms"
+app_title = "eLearning"
+app_publisher = "eLearning contributors"
+app_description = "Open source learning management system"
+app_icon_url = "/assets/lms/frontend/elearning.svg"
+app_icon_title = "eLearning"
+app_icon_route = "/lms"
+app_color = "grey"
+app_email = "support@example.com"
+app_license = "AGPL"
+required_apps = []
+
+
+def get_lms_path():
+	path = "lms"
+	if frappe.conf and frappe.conf.get("lms_path"):
+		path = frappe.conf.get("lms_path")
+	return path.strip("/")
+
+
+# Includes in <head>
+# ------------------
+
+# include js, css files in header of desk.html
+# app_include_css = "/assets/lms/css/lms.css"
+# app_include_js = "/assets/lms/js/lms.js"
+
+# include js, css files in header of web template
+# web_include_css = "/assets/lms/css/lms.css"
+web_include_js = []
+
+# include custom scss in every website theme (without file extension ".scss")
+# website_theme_scss = "lms/public/scss/website"
+
+# include js, css files in header of web form
+# webform_include_js = {"doctype": "public/js/doctype.js"}
+# webform_include_css = {"doctype": "public/css/doctype.css"}
+
+# include js in page
+# page_js = {"page" : "public/js/file.js"}
+
+# include js in doctype views
+# doctype_js = {"doctype" : "public/js/doctype.js"}
+# doctype_list_js = {"doctype" : "public/js/doctype_list.js"}
+# doctype_tree_js = {"doctype" : "public/js/doctype_tree.js"}
+# doctype_calendar_js = {"doctype" : "public/js/doctype_calendar.js"}
+
+# Home Pages
+# ----------
+
+# application home page (will override Website Settings)
+# home_page = "login"
+
+# website user home page (by Role)
+# role_home_page = {
+# 	"Role": "home_page"
+# }
+
+# Generators
+# ----------
+
+# automatically create page for each record of this doctype
+# website_generators = ["Web Page"]
+
+# Installation
+# ------------
+
+# before_install = "lms.install.before_install"
+after_install = "lms.install.after_install"
+after_sync = "lms.install.after_sync"
+before_uninstall = "lms.install.before_uninstall"
+setup_wizard_complete = "lms.demo.demo_data.create_demo_data"
+after_migrate = [
+	"lms.install.ensure_local_settings",
+	"lms.sqlite.build_index_in_background",
+	"lms.lms.doctype.lms_payment.lms_payment.add_unique_payment_id_constraint",
+	# Also on migrate, not only after_sync. Both seeders are create-if-absent, and
+	# running the sidebar one on fresh installs alone means a fourteenth built-in
+	# added to `standard_sidebar_items` later never reaches a site that has
+	# already run the v2_0 patch -- which is what its own docstring promises.
+	"lms.lms.sidebar.seed_sidebar_items",
+	"lms.lms.docperm_shadow.warn_about_shadowed_permlevels",
+]
+
+# Desk Notifications
+# ------------------
+# See frappe.core.notifications.get_notification_config
+
+# notification_config = "lms.notifications.get_notification_config"
+
+# Permissions
+# -----------
+# Permissions evaluated in scripted ways
+
+permission_query_conditions = {
+	"LMS Course": "lms.lms.permissions.course_query_conditions",
+	"Course Chapter": "lms.lms.permissions.chapter_query_conditions",
+	"LMS Course Progress": "lms.lms.permissions.course_record_query_conditions",
+	"LMS Video Watch Duration": "lms.lms.permissions.course_record_query_conditions",
+	"LMS Course Review": "lms.lms.permissions.course_record_query_conditions",
+	"LMS Enrollment": "lms.lms.permissions.enrollment_query_conditions",
+	"LMS Lesson Note": "lms.lms.permissions.lesson_note_query_conditions",
+	"LMS Coupon": "lms.lms.permissions.coupon_query_conditions",
+	"LMS Certificate": "lms.lms.doctype.lms_certificate.lms_certificate.get_permission_query_conditions",
+	"LMS Live Class": "lms.lms.doctype.lms_live_class.lms_live_class.get_permission_query_conditions",
+	"LMS Batch": "lms.lms.doctype.lms_batch.lms_batch.get_permission_query_conditions",
+	"LMS Program": "lms.lms.doctype.lms_program.lms_program.get_permission_query_conditions",
+	"Course Lesson": "lms.lms.doctype.course_lesson.course_lesson.get_permission_query_conditions",
+	"LMS Certificate Evaluation": "lms.lms.doctype.lms_certificate_evaluation.lms_certificate_evaluation.get_permission_query_conditions",
+	"LMS Batch Enrollment": "lms.lms.doctype.lms_batch_enrollment.lms_batch_enrollment.get_permission_query_conditions",
+	"LMS Quiz": "lms.lms.permissions.quiz_query_conditions",
+	"LMS Assignment": "lms.lms.permissions.assignment_query_conditions",
+	"LMS Programming Exercise": "lms.lms.permissions.programming_exercise_query_conditions",
+	"LMS Quiz Submission": "lms.lms.permissions.quiz_submission_query_conditions",
+	"LMS Assignment Submission": "lms.lms.permissions.assignment_submission_query_conditions",
+	"LMS Programming Exercise Submission": "lms.lms.permissions.programming_exercise_submission_query_conditions",
+}
+
+has_permission = {
+	"LMS Course": "lms.lms.permissions.course_has_permission",
+	"Course Chapter": "lms.lms.permissions.chapter_has_permission",
+	"LMS Course Progress": "lms.lms.permissions.course_record_has_permission",
+	"LMS Video Watch Duration": "lms.lms.permissions.course_record_has_permission",
+	"LMS Course Review": "lms.lms.permissions.course_record_has_permission",
+	"LMS Enrollment": "lms.lms.permissions.enrollment_has_permission",
+	"LMS Lesson Note": "lms.lms.permissions.lesson_note_has_permission",
+	"LMS Coupon": "lms.lms.permissions.coupon_has_permission",
+	"LMS Live Class": "lms.lms.doctype.lms_live_class.lms_live_class.has_permission",
+	"LMS Batch": "lms.lms.doctype.lms_batch.lms_batch.has_permission",
+	"LMS Program": "lms.lms.doctype.lms_program.lms_program.has_permission",
+	"LMS Certificate": "lms.lms.doctype.lms_certificate.lms_certificate.has_permission",
+	"Course Lesson": "lms.lms.doctype.course_lesson.course_lesson.has_permission",
+	"LMS Certificate Evaluation": "lms.lms.doctype.lms_certificate_evaluation.lms_certificate_evaluation.has_permission",
+	"LMS Batch Enrollment": "lms.lms.doctype.lms_batch_enrollment.lms_batch_enrollment.has_permission",
+	"File": "lms.lms.permissions.file_has_permission",
+	"LMS Quiz": "lms.lms.permissions.assessment_has_permission",
+	"LMS Assignment": "lms.lms.permissions.assessment_has_permission",
+	"LMS Programming Exercise": "lms.lms.permissions.assessment_has_permission",
+	"LMS Question": "lms.lms.permissions.has_authored_content_permission",
+	"LMS Quiz Submission": "lms.lms.permissions.assessment_submission_has_permission",
+	"LMS Assignment Submission": "lms.lms.permissions.assessment_submission_has_permission",
+	"LMS Programming Exercise Submission": "lms.lms.permissions.assessment_submission_has_permission",
+}
+
+# DocType Class
+# ---------------
+# Override standard doctype classes
+
+override_doctype_class = {
+	"Web Template": "lms.overrides.web_template.CustomWebTemplate",
+}
+
+# Document Events
+# ---------------
+# Hook on document methods and events
+
+CHILD_ROW_MOVE_GATE = "lms.lms.permissions.refuse_moving_child_rows_out_of_content_the_user_cannot_write"
+
+doc_events = {
+	"*": {
+		"on_change": [
+			"lms.lms.doctype.lms_badge.lms_badge.process_badges",
+		]
+	},
+	"Discussion Reply": {
+		"after_insert": "lms.lms.utils.handle_notifications",
+		"validate": "lms.lms.utils.validate_discussion_reply",
+	},
+	"Notification Log": {"on_change": "lms.lms.utils.publish_notifications"},
+	# One rule, two entry points: a child row whose stored parent is not the one it is
+	# being saved under answers to the parent it is leaving.
+	#
+	# On the child, because has_child_permission is only ever shown the parent named on
+	# the row being saved, so a row moved out of somebody else's quiz is checked against
+	# the destination alone. A has_permission entry for a child would never be called --
+	# frappe.has_permission returns has_child_permission for an istable doctype before
+	# any controller hook for the child is reached.
+	#
+	# On the parent, because doc_events on a child do NOT fire when its parent saves its
+	# own children, and Document.update_child_table db_updates every submitted row by
+	# name with no ownership check. A save of the thief's own quiz naming a foreign row
+	# is checked for `write` on the destination only, and reaches the child gate never.
+	"LMS Quiz": {"validate": CHILD_ROW_MOVE_GATE},
+	"LMS Programming Exercise": {"validate": CHILD_ROW_MOVE_GATE},
+	"LMS Assignment": {
+		"validate": CHILD_ROW_MOVE_GATE,
+	},
+	"LMS Question": {"validate": CHILD_ROW_MOVE_GATE},
+	"LMS Quiz Question": {"validate": CHILD_ROW_MOVE_GATE},
+	"LMS Test Case": {"validate": CHILD_ROW_MOVE_GATE},
+	"LMS Content Author": {"validate": CHILD_ROW_MOVE_GATE},
+	# LMS Program carries `authors` too -- composed into its own has_permission hook
+	# rather than registered on the shared gate -- so the same two doors reach its
+	# child tables.
+	"LMS Program": {"validate": CHILD_ROW_MOVE_GATE},
+	"LMS Program Course": {"validate": CHILD_ROW_MOVE_GATE},
+	"LMS Program Member": {"validate": CHILD_ROW_MOVE_GATE},
+	"User": {
+		"validate": "lms.lms.user.validate_username_duplicates",
+		"before_insert": "lms.lms.user.add_lms_student_role",
+	},
+}
+# Scheduled Tasks
+# ---------------
+
+scheduler_events = {
+	"all": [
+		"lms.sqlite.build_index_in_background",
+		"lms.integrations.pramaan_mail.drain",
+		"lms.lms.doctype.lms_live_class.lms_live_class.retry_pending_invites",
+	],
+	"hourly": [
+		"lms.lms.doctype.lms_certificate_request.lms_certificate_request.schedule_evals",
+		"lms.lms.doctype.lms_course.lms_course.update_course_statistics",
+		"lms.lms.doctype.lms_certificate_request.lms_certificate_request.mark_eval_as_completed",
+	],
+	"daily": [
+		"lms.job.doctype.job_opportunity.job_opportunity.update_job_openings",
+		"lms.lms.doctype.lms_payment.lms_payment.send_payment_reminder",
+		"lms.lms.doctype.lms_batch.lms_batch.send_batch_start_reminder",
+		"lms.lms.doctype.lms_live_class.lms_live_class.send_live_class_reminder",
+		"lms.lms.doctype.lms_course.lms_course.send_notification_for_published_courses",
+		"lms.lms.doctype.course_lesson.course_lesson.rename_settled_untitled_lessons",
+	],
+}
+
+fixtures = ["Custom Field", "Function", "Industry", "LMS Category"]
+
+# Testing
+# -------
+
+before_tests = "lms.test_utils.before_tests"
+
+# Overriding Methods
+# ------------------------------
+#
+override_whitelisted_methods = {}
+#
+# each overriding function accepts a `data` argument;
+# generated from the base implementation of the doctype dashboard,
+# along with any modifications made in other Frappe apps
+# override_doctype_dashboards = {
+# 	"Task": "lms.task.get_dashboard_data"
+# }
+
+# exempt linked doctypes from being automatically cancelled
+#
+# auto_cancel_exempted_doctypes = ["Auto Repeat"]
+
+# Add all simple route rules here
+website_route_rules = [
+	{"from_route": f"/{get_lms_path()}/<path:app_path>", "to_route": "_lms"},
+	{"from_route": f"/{get_lms_path()}", "to_route": "_lms"},
+	{
+		"from_route": "/courses/<course_name>/<certificate_id>",
+		"to_route": "certificate",
+	},
+]
+
+website_redirects = [
+	{"source": "/update-profile", "target": "/edit-profile"},
+	{"source": "/courses", "target": f"/{get_lms_path()}/courses"},
+	{
+		"source": r"^/courses/.*$",
+		"target": f"/{get_lms_path()}/courses",
+	},
+	{"source": "/batches", "target": f"/{get_lms_path()}/batches"},
+	{
+		"source": r"/batches/(.*)",
+		"target": f"/{get_lms_path()}/batches",
+		"match_with_query_string": True,
+	},
+	{"source": "/job-openings", "target": f"/{get_lms_path()}/job-openings"},
+	{
+		"source": r"/job-openings/(.*)",
+		"target": f"/{get_lms_path()}/job-openings",
+		"match_with_query_string": True,
+	},
+	{"source": "/statistics", "target": f"/{get_lms_path()}/statistics"},
+	{"source": "_lms", "target": f"/{get_lms_path()}"},
+]
+
+update_website_context = [
+	"lms.widgets.update_website_context",
+]
+
+jinja = {
+	"methods": [
+		"lms.lms.utils.get_lesson_count",
+		"lms.lms.utils.get_instructors",
+		"lms.lms.utils.get_lesson_index",
+		"lms.lms.utils.get_lesson_url",
+		"lms.lms.utils.get_lms_route",
+		"lms.lms.utils.is_instructor",
+		"lms.plugins.connected_sign_in_enabled",
+		"lms.lms.utils.get_palette",
+	],
+	"filters": [],
+}
+
+extend_bootinfo = [
+	"lms.lms.utils.extend_bootinfo",
+]
+## Specify the additional tabs to be included in the user profile page.
+## Each entry must be a subclass of lms.lms.plugins.ProfileTab
+# profile_tabs = []
+
+## Specify the extension to be used to control what scripts and stylesheets
+## to be included in lesson pages. The specified value must be be a
+## subclass of lms.plugins.PageExtension
+# lms_lesson_page_extension = None
+
+# lms_lesson_page_extensions = [
+# 	"lms.plugins.LiveCodeExtension"
+# ]
+
+has_website_permission = {
+	"LMS Certificate Evaluation": "lms.lms.doctype.lms_certificate_evaluation.lms_certificate_evaluation.has_website_permission",
+	"LMS Certificate": "lms.lms.doctype.lms_certificate.lms_certificate.has_website_permission",
+}
+
+## Markdown Macros for Lessons
+lms_markdown_macro_renderers = {
+	"Exercise": "lms.plugins.exercise_renderer",
+	"Quiz": "lms.plugins.quiz_renderer",
+	"YouTubeVideo": "lms.plugins.youtube_video_renderer",
+	"Video": "lms.plugins.video_renderer",
+	"Assignment": "lms.plugins.assignment_renderer",
+	"Embed": "lms.plugins.embed_renderer",
+	"Audio": "lms.plugins.audio_renderer",
+	"PDF": "lms.plugins.pdf_renderer",
+}
+
+page_renderer = [
+	"lms.page_renderers.SCORMRenderer",
+]
+
+# set this to "/" to have profiles on the top-level
+profile_url_prefix = "/users/"
+
+signup_form_template = "lms.plugins.show_custom_signup"
+
+on_login = "lms.lms.user.on_login"
+
+before_request = [
+	"lms.integrations.configuration.install_local_boundaries",
+	"lms.integrations.pramaan_mail.install_transport",
+]
+before_job = [
+	"lms.integrations.configuration.install_local_boundaries",
+	"lms.integrations.pramaan_mail.install_transport",
+]
+before_migrate = ["lms.integrations.configuration.install_local_boundaries"]
+
+add_to_apps_screen = [
+	{
+		"name": "lms",
+		"logo": "/assets/lms/frontend/elearning.svg",
+		"title": "eLearning",
+		"route": f"/{get_lms_path()}",
+		"has_permission": "lms.lms.api.check_app_permission",
+	}
+]
+
+sqlite_search = ["lms.sqlite.LearningSearch"]
+auth_hooks = ["lms.auth.authenticate"]
+require_type_annotated_api_methods = True
+
+# === Raven membership provider ===
+# Hook contract + admin setup: ../raven-membership-provider.md
+# TODO: that page is an interim capture. Publish it at 
+# (specs/extensibility.md: "A hook isn't shipped until the docs exist") and delete it.
+# LMS contributes its rule types + evaluator to the standalone `raven_integration`
+# app via the `raven_membership_providers` hook. See lms/raven_provider.py.
+raven_membership_providers = ["lms.raven_provider.get_provider"]
+
+# Settings > Integrations > Raven sits inside the Settings modal, which is open to
+# any Moderator, so the endpoints behind it have to be too. raven_integration gates
+# on System Manager plus whatever this hook names, and grants the named roles the
+# permissions its own doctypes need on install/migrate.
+raven_integration_manager_roles = ["Moderator"]
+
+# The sidebar's built-in rows, and their default order — which reproduces what
+# getSidebarItems() renders today, exactly. An app that wants a fourteenth adds
+# it here; the row says where it sits and whether it shows, and the JavaScript
+# entry of the same name1 says what it is.
+standard_sidebar_items = [
+	{"name1": "home", "is_standard": 1, "item_type": "Built-in"},
+	{"name1": "search", "is_standard": 1, "item_type": "Built-in"},
+	{"name1": "notifications", "is_standard": 1, "item_type": "Built-in"},
+	{"name1": "courses", "is_standard": 1, "item_type": "Built-in"},
+	{"name1": "programs", "is_standard": 1, "item_type": "Built-in"},
+	{"name1": "batches", "is_standard": 1, "item_type": "Built-in"},
+	{"name1": "certifications", "is_standard": 1, "item_type": "Built-in"},
+	{"name1": "jobs", "is_standard": 1, "item_type": "Built-in"},
+	{"name1": "statistics", "is_standard": 1, "item_type": "Built-in"},
+	{"name1": "contact_us", "is_standard": 1, "item_type": "Built-in"},
+	{"name1": "quizzes", "is_standard": 1, "item_type": "Built-in"},
+	{"name1": "assignments", "is_standard": 1, "item_type": "Built-in"},
+	{"name1": "programming_exercises", "is_standard": 1, "item_type": "Built-in"},
+]

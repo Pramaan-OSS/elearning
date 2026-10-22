@@ -1,0 +1,223 @@
+import { defineConfig } from 'vite'
+import vue from '@vitejs/plugin-vue'
+import fs from 'node:fs'
+import path from 'path'
+import { VitePWA } from 'vite-plugin-pwa'
+import { viteStaticCopy } from 'vite-plugin-static-copy'
+
+// `@framework/ui` is imported by name and resolved through node_modules, so the
+// link there is load-bearing rather than a convenience. package.json declares it
+// as `link:../../frappe/ui`, which is correct from apps/lms/frontend and wrong
+// from a git worktree of this app: that resolves to
+// `apps/lms/.lms-worktrees/frappe/ui`, which nothing creates. An install there
+// leaves a link into empty space and the only symptom is "Failed to resolve
+// import @framework/ui/ConditionBuilder", naming neither the link nor the fix.
+//
+// Nothing here can repair it, since yarn owns that path, so this says so instead,
+// with the command. It asks only whether the link leads anywhere: realpathSync
+// throws on a dangling symlink, which is exactly the worktree case. A checkout
+// with no frappe app beside it has no link at all and reaches vite's own
+// "does the file exist?", which is the right error for a missing source.
+function assertFrameworkUiLinked(frontend) {
+	const link = path.join(frontend, 'node_modules', '@framework', 'ui')
+	try {
+		if (fs.statSync(fs.realpathSync(link)).isDirectory()) return
+	} catch {
+		// falls through to the throw below
+	}
+	if (!fs.existsSync(path.dirname(link))) return
+	throw new Error(
+		`@framework/ui at ${link} does not lead anywhere.\n` +
+			"package.json's `link:../../frappe/ui` only resolves from apps/lms/frontend.\n" +
+			'Repair it with:\n  ln -sfn <path to apps/frappe/ui> ' +
+			link
+	)
+}
+
+// Render the same server boot data in development, then load source modules.
+// This keeps local sign-in, CSRF, and site routing identical in both modes.
+function localDevPage() {
+	return {
+		name: 'local-development-page',
+		configureServer(server) {
+			server.middlewares.use(async (req, res, next) => {
+				if (!req.url?.startsWith('/lms')) return next()
+				try {
+					const response = await fetch(`http://127.0.0.1:8000${req.url}`, {
+						headers: { cookie: req.headers.cookie || '', host: req.headers.host },
+						signal: AbortSignal.timeout(30000),
+					})
+					let html = await response.text()
+					html = html.replace(/<script\b[^>]*type="module"[^>]*src="[^"]+"[^>]*><\/script>/g, '')
+						.replace(/<link\b[^>]*rel="modulepreload"[^>]*>/g, '')
+						.replace(/<link\b[^>]*href="\/assets\/lms\/frontend\/[^"]+\.css"[^>]*>/g, '')
+						.replace('</body>', '<script type="module" src="/src/main.js"></script></body>')
+					res.statusCode = response.status
+					res.setHeader('Content-Type', 'text/html; charset=utf-8')
+					res.end(await server.transformIndexHtml(req.url, html))
+				} catch (error) { next(error) }
+			})
+		},
+	}
+}
+
+export default defineConfig(async ({ mode }) => {
+	assertFrameworkUiLinked(__dirname)
+	const frappeui = await importFrappeUIPlugin()
+
+	const config = {
+		define: {
+			__VUE_PROD_HYDRATION_MISMATCH_DETAILS__: 'false',
+		},
+		plugins: [
+			localDevPage(),
+			frappeui({
+				frappeProxy: true,
+				lucideIcons: true,
+				jinjaBootData: true,
+				buildConfig: {
+					indexHtmlPath: '../lms/www/_lms.html',
+				},
+			}),
+			vue(),
+			VitePWA({
+				registerType: 'autoUpdate',
+				devOptions: {
+					enabled: false,
+				},
+				workbox: {
+					cleanupOutdatedCaches: true,
+					maximumFileSizeToCacheInBytes: 5 * 1024 * 1024,
+					globDirectory: '/assets/lms/frontend',
+					globPatterns: ['**/*.{js,ts,css,html,svg}'],
+					runtimeCaching: [
+						{
+							urlPattern: ({ request }) =>
+								request.destination === 'document',
+							handler: 'NetworkFirst',
+							options: {
+								cacheName: 'html-cache',
+							},
+						},
+					],
+				},
+				manifest: false,
+			}),
+			// pdf.js needs cMaps (JPEG2000/JBIG2 + CJK) and standard_fonts (non-embedded
+			// fonts) as sibling assets, or those PDFs render blank and look like a pdf.js
+			// bug. Copy them under pdfjs/; PdfBlock.vue points cMapUrl/standardFontDataUrl
+			// at `${BASE_URL}pdfjs/...`. Served in dev too (static-copy dev middleware).
+			viteStaticCopy({
+				targets: [
+					{
+						src: 'node_modules/pdfjs-dist/cmaps/*',
+						dest: 'pdfjs/cmaps',
+					},
+					{
+						src: 'node_modules/pdfjs-dist/standard_fonts/*',
+						dest: 'pdfjs/standard_fonts',
+					},
+				],
+			}),
+		],
+		server: {
+			// The linked @framework/ui (apps/frappe/ui) is imported by name and
+			// resolved through its `exports`, so in dev vite serves it from source,
+			// outside this root, hence the allowance helpdesk makes for it too.
+			// Named by resolved path rather than by counting `..` levels: `../..`
+			// is apps/ only from apps/lms/frontend, and a worktree of this app sits
+			// two levels deeper, where it lands on .lms-worktrees/ and the framework
+			// files 403 with "not allowed to be served".
+			fs: {
+				allow: ['..', '../..', '../../..', '../../../..'],
+			},
+			host: '0.0.0.0', // Accept connections from any network interface
+			allowedHosts: true,
+			// SCORM packages are served by Frappe's SCORMRenderer at /scorm/... .
+			// frappeProxy only forwards ^/(desk|app|login|api|assets|files|private),
+			// so without this the iframe's /scorm URL hits the SPA fallback and renders
+			// blank. The `router` mirrors frappeProxy: Frappe resolves the site from the
+			// Host header, so we must forward to http://<site>:8000; a bare 127.0.0.1
+			// target makes Frappe 404 with "127.0.0.1 does not exist". (Backend :8000.)
+			proxy: {
+				'/scorm': {
+					target: 'http://127.0.0.1:8000',
+					router: (req) =>
+						`http://${req.headers.host.split(':')[0]}:8000`,
+				},
+			},
+		},
+		resolve: {
+			// Resolve the linked `@framework/ui` through its symlink rather than its real
+			// path. It is `link:../../frappe/ui`, and its own source imports bare deps of
+			// its own: `vuedraggable` in ConditionGroup.vue, plus reka-ui, dompurify and
+			// frappe-ui. Resolution walks up from the *importer*, so following the link to
+			// `apps/frappe/ui/src/...` looks for them under `apps/frappe` — which on a bench
+			// has its own node_modules and in CI is a sparse checkout of `ui` alone. Keeping
+			// the symlinked path walks up through `apps/lms/frontend/node_modules` instead,
+			// where LMS already declares every one of them.
+			//
+			// So it fails only in CI, which is why it was invisible here: locally
+			// `apps/frappe/node_modules/vuedraggable` satisfies the lookup. Both the vitest
+			// run and the SPA build hit it, as "Failed to resolve import vuedraggable from
+			// ...ConditionGroup.vue". Reproduce it by pointing the link at a copy of
+			// apps/frappe/ui that has no node_modules beside it.
+			preserveSymlinks: true,
+			alias: {
+				'@': path.resolve(__dirname, 'src'),
+			},
+			// Force one copy of prosemirror; duplicate copies break tiptap's
+			// instanceof checks and crash the list buttons.
+			dedupe: [
+				// @framework/ui imports from vue and frappe-ui; a second copy of
+				// either would give its Combobox a different frappe-ui than ours.
+				'prosemirror-model',
+				'prosemirror-state',
+				'prosemirror-view',
+				'prosemirror-transform',
+				// A nested second copy of these makes the html language throw
+				// while parsing and leaves javascript with no syntax tree.
+				'@codemirror/language',
+				'@codemirror/state',
+				'@codemirror/view',
+				'@lezer/common',
+				'@lezer/lr',
+				'@lezer/highlight',
+				'vue',
+				'frappe-ui',
+			],
+		},
+		optimizeDeps: {
+			include: [
+				'tailwind.config.js',
+				'highlight.js',
+				'plyr',
+				// frappe-ui is excluded below, so a subpath only it imports is served
+				// raw beside a pre-bundled sibling: a second `echarts/core` or
+				// `@codemirror/state`. Bundle each family in one run, as Insights does.
+				'echarts/core',
+				'echarts/charts',
+				'echarts/components',
+				'echarts/renderers',
+				'echarts/features',
+				'@codemirror/state',
+				'@codemirror/view',
+				'@codemirror/language',
+				'@codemirror/commands',
+				'@codemirror/search',
+				'@codemirror/autocomplete',
+				'@codemirror/lang-html',
+				'@codemirror/lang-javascript',
+				'@lezer/common',
+				'@lezer/highlight',
+			],
+			exclude: mode === 'production' ? [] : ['frappe-ui'],
+		},
+	}
+	return config
+})
+
+async function importFrappeUIPlugin() {
+	const module = await import('frappe-ui/vite')
+	return module.default
+}

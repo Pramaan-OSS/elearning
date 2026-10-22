@@ -1,0 +1,331 @@
+<template>
+	<FormShell :title="formTitle" size="lg" @close="close">
+		<template #default>
+			<div v-if="!canManageAssignments" class="p-4 text-base text-ink-gray-6">
+				{{ __('You are not permitted to manage assignments.') }}
+			</div>
+			<fieldset
+				v-else
+				:disabled="!canEdit"
+				data-testid="assignment-fields"
+				class="m-0 min-w-0 space-y-4 border-0 p-0 text-base"
+			>
+				<p
+					v-if="canWrite === false"
+					data-testid="assignment-read-only-note"
+					class="text-ink-gray-6"
+				>
+					{{ __('Only the authors of this assignment can edit it.') }}
+				</p>
+				<FormControl
+					v-model="assignment.title"
+					:label="__('Title')"
+					:required="true"
+				/>
+				<FormControl
+					v-model="assignment.type"
+					type="select"
+					:options="assignmentOptions"
+					:label="__('Submission Type')"
+					:required="true"
+				/>
+				<Link
+					v-model="assignment.course"
+					:label="__('Course')"
+					doctype="LMS Course"
+					placeholder=" "
+				/>
+				<BooleanSwitch
+					v-model="assignment.enable_scheduling"
+					size="sm"
+					:label="__('Enable Scheduling')"
+					:description="
+						__('Restrict when learners can submit this assignment.')
+					"
+				/>
+				<FormControl
+					v-if="assignment.enable_scheduling"
+					type="datetime-local"
+					:model-value="toDatetimeLocal(assignment.schedule_start)"
+					@update:model-value="
+						(val) => (assignment.schedule_start = fromDatetimeLocal(val))
+					"
+					:label="__('Schedule Start')"
+					:required="true"
+				/>
+				<FormControl
+					v-if="assignment.enable_scheduling"
+					type="datetime-local"
+					:model-value="toDatetimeLocal(assignment.schedule_end)"
+					@update:model-value="
+						(val) => (assignment.schedule_end = fromDatetimeLocal(val))
+					"
+					:label="__('Schedule End')"
+					:description="
+						__(
+							'Optional. Leave empty to keep the assignment open after it starts.'
+						)
+					"
+				/>
+				<div
+					role="group"
+					:aria-labelledby="questionLabelId"
+					class="space-y-1.5"
+				>
+					<InputLabel
+						:id="questionLabelId"
+						data-testid="assignment-question-label"
+						:label="__('Question')"
+						:required="true"
+					/>
+					<RichTextEditor
+						:ariaLabelledby="questionLabelId"
+						:ariaRequired="true"
+						:content="assignment.question"
+						@change="(val: string) => (assignment.question = val)"
+						:editable="canEdit"
+						:fixedMenu="true"
+						minHeight="10rem"
+						maxHeight="18rem"
+					/>
+				</div>
+			</fieldset>
+		</template>
+		<template #actions>
+			<div
+				v-if="canManageAssignments"
+				class="flex items-center justify-end gap-2"
+			>
+				<HeaderButton
+					v-if="assignmentID !== 'new'"
+					:route="{
+						name: 'AssignmentSubmissions',
+						query: { assignment: assignmentID },
+					}"
+					:label="__('Check Submissions')"
+					icon="lucide-clipboard-list"
+				/>
+				<HeaderButton
+					v-if="canEdit"
+					data-testid="assignment-save"
+					:label="isNew ? __('Create') : __('Save')"
+					variant="solid"
+					:loading="saving"
+					@click="saveAssignment"
+				/>
+			</div>
+		</template>
+	</FormShell>
+</template>
+<script setup lang="ts">
+import {
+	FormControl,
+	createDocumentResource,
+	createResource,
+	toast,
+} from 'frappe-ui'
+import type { FrappeResourceError } from 'frappe-ui'
+import { computed, inject, reactive, useId, watch } from 'vue'
+import { sanitizeOnWrite } from '@/utils/sanitizeOnWrite'
+import FormShell from '@/components/FormShell.vue'
+import HeaderButton from '@/components/HeaderButton.vue'
+import BooleanSwitch from '@/components/Controls/BooleanSwitch.vue'
+import { useFormRoute } from '@/composables/useFormRoute'
+import Link from '@/components/Controls/Link.vue'
+import RichTextEditor from '@/components/RichTextEditor.vue'
+import { InputLabel } from 'frappe-ui/experimental'
+import { resourceErrorMessage, submitResource } from '@/utils/resource'
+import { toDatetimeLocal, fromDatetimeLocal } from '@/utils/schedule'
+import { useCanWrite } from '@/composables/useCanWrite'
+
+const questionLabelId = useId()
+
+const props = withDefaults(defineProps<{ assignmentID?: string }>(), {
+	assignmentID: 'new',
+})
+
+// The list page owns the count and the filtered query, so it — not this form —
+// decides how to refetch after a create. See the comment on `newAssignment` for
+// why this is a signal rather than a shared list resource.
+const emit = defineEmits<{ created: [] }>()
+
+const user = inject<any>('$user')
+const { close, saveAndReplace } = useFormRoute({ name: 'Assignments' })
+
+const isNew = computed(() => props.assignmentID === 'new')
+
+// Placing an assignment grants use only, so a non-author opens it read-only.
+const canWrite = useCanWrite('LMS Assignment', () =>
+	isNew.value ? undefined : props.assignmentID
+)
+const canEdit = computed(() => canWrite.value === true)
+
+const formTitle = computed(() =>
+	isNew.value ? __('New Assignment') : __('Edit Assignment')
+)
+
+// Copied off the two places Assignments.vue gates this form today: the page
+// guard at :104-106 (moderators and instructors only) and `readOnlyMode`, which
+// hides the Create button (:19) and swallows the row click (:178). A URL goes
+// through neither. This is a UX gate, not an authorization boundary — the
+// server-side DocPerms on LMS Assignment are.
+const canManageAssignments = computed<boolean>(() => {
+	// Cast because Window carries no read_only_mode declaration; same shape as
+	// NewBatchForm.vue:190.
+	if ((window as Window & { read_only_mode?: boolean }).read_only_mode)
+		return false
+	return Boolean(user.data?.is_moderator || user.data?.is_instructor)
+})
+
+interface AssignmentFields {
+	title: string
+	type: string
+	question: string
+	course: string
+	enable_scheduling: number
+	schedule_start: string | null
+	schedule_end: string | null
+}
+
+const assignment = reactive<AssignmentFields>({
+	title: '',
+	type: '',
+	question: '',
+	course: '',
+	enable_scheduling: 0,
+	schedule_start: null,
+	schedule_end: null,
+})
+
+// C4: edit mode used to copy its values out of the parent list's in-memory
+// array, which is empty when someone lands here by link or reload — the form
+// then rendered blank and a Save would have written those blanks back. Fetch
+// the record ourselves instead, the same way JobForm.vue:182-190 does.
+// createDocumentResource returns undefined when `name` is falsy
+// (documentResource.js:15), so in create mode there is simply no resource.
+const editingName =
+	props.assignmentID !== 'new' ? props.assignmentID : undefined
+const assignmentDoc = createDocumentResource({
+	doctype: 'LMS Assignment',
+	// frappe-ui types `name` as required even though documentResource.js:15
+	// returns undefined for a falsy one — which is the create-mode contract
+	// JobForm.vue:184 already relies on. Cast rather than invent a name.
+	name: editingName as string,
+	auto: Boolean(editingName),
+	onError(err: FrappeResourceError) {
+		toast.error(resourceErrorMessage(err, __('Error')))
+		console.error(err)
+	},
+})
+
+// C3: the watch this replaces had no `immediate`, so a directly mounted route
+// never ran its load at all. It is still needed here alongside `auto`, because
+// documentResource hands back a cached instance for a record already visited
+// this session, whose `doc` is populated before this watcher is registered.
+watch(
+	() => assignmentDoc?.doc,
+	(doc: any) => {
+		if (!doc) return
+		assignment.title = doc.title
+		assignment.type = doc.type
+		assignment.question = doc.question
+		assignment.course = doc.course || ''
+		assignment.enable_scheduling = doc.enable_scheduling ? 1 : 0
+		assignment.schedule_start = doc.schedule_start || null
+		assignment.schedule_end = doc.schedule_end || null
+	},
+	{ immediate: true }
+)
+
+// Deliberately NOT the parent list's cache key, unlike NewBatchForm.vue:178.
+// Assignments.vue:148-162 configures its list through CONSTRUCTOR options
+// (fields, orderBy, transform) and createListResource discards the second
+// caller's options for an identical key (listResource.js:15-22) — so on a cold
+// deep link this form would create the instance first and strip the list of its
+// field list and its date formatting. Design C4b says to check that per page
+// and to signal the parent explicitly where sharing is unsafe; this is that
+// case, hence the `created` emit below.
+const newAssignment = createResource({
+	url: 'frappe.client.insert',
+	makeParams: () => ({
+		doc: { doctype: 'LMS Assignment', ...assignment },
+	}),
+	onSuccess() {
+		toast.success(__('Assignment created successfully'))
+		emit('created')
+		// replace, not push: the form entry is consumed so Back reaches the list
+		// rather than a stale, already-saved form.
+		saveAndReplace({ name: 'Assignments' })
+	},
+	onError(err: FrappeResourceError) {
+		toast.error(resourceErrorMessage(err, __('Error')))
+		console.error(err)
+	},
+})
+
+const saving = computed<boolean>(() =>
+	Boolean(newAssignment.loading || assignmentDoc?.setValue?.loading)
+)
+
+const validateFields = (): boolean => {
+	assignment.title = sanitizeOnWrite(assignment.title.trim())
+	assignment.question = sanitizeOnWrite(assignment.question)
+	if (assignment.enable_scheduling) {
+		if (!assignment.schedule_start) {
+			toast.error(__('Schedule Start is required when scheduling is enabled.'))
+			return false
+		}
+		if (
+			assignment.schedule_end &&
+			new Date(assignment.schedule_end) <= new Date(assignment.schedule_start)
+		) {
+			toast.error(__('Schedule End must be after Schedule Start.'))
+			return false
+		}
+	} else {
+		assignment.schedule_start = null
+		assignment.schedule_end = null
+	}
+	return true
+}
+
+const updateAssignment = (): void => {
+	// setValue's beforeSubmit merges into `doc`, so it cannot run before the
+	// fetch lands — documentResource.js:46-51 would Object.assign onto null.
+	if (!assignmentDoc?.doc) return
+	submitResource(
+		assignmentDoc.setValue,
+		{ ...assignment },
+		{
+			onSuccess() {
+				toast.success(__('Assignment updated successfully'))
+				// The edited row reaches the list on its own: setValue patches it
+				// in every registered list resource for the doctype
+				// (documentResource.js:50). Only a create needs the signal above.
+				saveAndReplace({ name: 'Assignments' })
+			},
+			onError(err: FrappeResourceError) {
+				toast.error(resourceErrorMessage(err, __('Error')))
+				console.error(err)
+			},
+		}
+	)
+}
+
+const saveAssignment = (): void => {
+	if (!canManageAssignments.value || !canEdit.value) return
+	if (!validateFields()) return
+	if (isNew.value) newAssignment.submit()
+	else updateAssignment()
+}
+
+const assignmentOptions = computed(() => {
+	return [
+		{ label: 'PDF', value: 'PDF' },
+		{ label: 'Image', value: 'Image' },
+		{ label: 'Document', value: 'Document' },
+		{ label: 'Text', value: 'Text' },
+		{ label: 'URL', value: 'URL' },
+	]
+})
+</script>

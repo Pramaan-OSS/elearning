@@ -1,0 +1,41 @@
+#!/bin/sh
+# One command: generate secrets, then bring the stack up.
+set -eu
+umask 077
+cd "$(dirname "$0")"
+
+if [ ! -f .env ]; then
+  cp .env.example .env
+fi
+
+case "${1:---production}" in
+  --production) export ELEARNING_RUN_MODE=production ELEARNING_WEB_UPSTREAM=8000 ;;
+  --dev) export ELEARNING_RUN_MODE=development ELEARNING_WEB_UPSTREAM=8080 ;;
+  *) printf '%s\n' 'Use ./start, ./start --production, or ./start --dev.'; exit 2 ;;
+esac
+
+python3 scripts/local-config.py
+port=$(python3 scripts/local-config.py --print-port)
+docker compose --env-file .env -f docker/docker-compose.yml up --build --detach || {
+  printf '%s\n' "Startup did not complete. See: docker compose --env-file .env -f docker/docker-compose.yml logs app"
+  exit 1
+}
+attempt=0
+until python3 - "$port" <<'CHECK'
+import sys
+import urllib.request
+try:
+    urllib.request.urlopen(f"http://localhost:{sys.argv[1]}/login", timeout=5)
+except Exception:
+    raise SystemExit(1)
+CHECK
+do
+  attempt=$((attempt + 1))
+  if [ "$attempt" -ge 180 ]; then
+    printf '%s\n' "Startup did not complete. Check the app container logs."
+    exit 1
+  fi
+  sleep 2
+done
+printf 'eLearning is running at http://localhost:%s.\n' "$port"
+printf 'Sign in as Administrator. The password is in .env as ELEARNING_ADMIN_PASSWORD.\n'

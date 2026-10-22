@@ -1,0 +1,50 @@
+<template>
+	<div v-if="relatedCourses.data?.length" class="mt-10">
+		<div class="flex items-center justify-between mb-6">
+			<div class="text-3xl-semibold text-ink-gray-9">
+				{{ __('Related Courses') }}
+			</div>
+		</div>
+		<div
+			class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4 gap-4"
+		>
+			<CourseCard
+				v-for="course in relatedCourses.data"
+				:key="course.name"
+				:course="course"
+				:to="{ name: 'CourseDetail', params: { courseName: course.name } }"
+				external
+			/>
+		</div>
+	</div>
+</template>
+
+<script setup lang="ts">
+import { createResource } from 'frappe-ui'
+import { watch } from 'vue'
+import CourseCard from '@/components/CourseCard.vue'
+import type { LMSCourse } from '@/types/lms/LMSCourse'
+import type { Resource } from '@/types'
+
+const props = defineProps<{
+	courseName: string
+}>()
+
+const relatedCourses = createResource({
+	url: 'lms.lms.utils.get_related_courses',
+	cache: ['related_courses', props.courseName],
+	makeParams() {
+		return {
+			course: props.courseName,
+		}
+	},
+	auto: Boolean(props.courseName),
+}) as Resource<LMSCourse[] | null>
+
+watch(
+	() => props.courseName,
+	() => {
+		if (props.courseName) relatedCourses.reload()
+	}
+)
+</script>

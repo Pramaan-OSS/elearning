@@ -1,0 +1,194 @@
+<template>
+	<div v-if="batch.data" class="border-2 rounded-5 lg:w-72">
+		<VideoPreview
+			:video-link="batch.data.video_link"
+			:fallback-image="batch.data.image"
+		/>
+		<div class="p-5">
+			<Badge
+				v-if="batch.data.seat_count && batch.data.seats_left > 0"
+				variant="subtle"
+				theme="green"
+				size="md"
+				:class="
+					batch.data.amount || batch.data.courses.length
+						? 'float-end'
+						: 'w-fit mb-4'
+				"
+				:label="
+					batch.data.seats_left +
+					' ' +
+					(batch.data.seats_left > 1 ? __('Seats Left') : __('Seat Left'))
+				"
+			/>
+			<Badge
+				v-else-if="batch.data.seat_count && batch.data.seats_left <= 0"
+				variant="subtle"
+				theme="red"
+				size="md"
+				class="float-end"
+				:label="__('Sold Out')"
+			/>
+			<div
+				v-if="batch.data.amount"
+				class="text-lg-semibold mb-5 text-ink-gray-9"
+			>
+				{{ formatNumberIntoCurrency(batch.data.amount, batch.data.currency) }}
+			</div>
+			<div
+				v-if="batch.data.courses.length"
+				class="flex items-center mb-3 text-ink-gray-7"
+			>
+				<span class="lucide-book-open h-4 w-4 me-2" />
+				<span> {{ batch.data.courses.length }} {{ __('Courses') }} </span>
+			</div>
+			<div class="flex items-center mb-3 text-ink-gray-7">
+				<span class="lucide-calendar h-4 w-4 me-2" />
+				<span>
+					{{
+						getFormattedDateRange(batch.data.start_date, batch.data.end_date)
+					}}
+				</span>
+			</div>
+			<div class="flex items-center mb-3 text-ink-gray-7">
+				<span class="lucide-clock h-4 w-4 me-2" />
+				<span dir="ltr">
+					{{ formatTime(batch.data.start_time) }} -
+					{{ formatTime(batch.data.end_time) }}
+				</span>
+			</div>
+			<div v-if="batch.data.timezone" class="flex items-center text-ink-gray-7">
+				<span class="lucide-globe h-4 w-4 me-2" />
+				<span>
+					{{
+						formatTimezone(
+							batch.data.timezone,
+							nextOccurrence(batch.data.start_date, batch.data.end_date)
+						)
+					}}
+				</span>
+			</div>
+
+			<div v-if="!readOnlyMode && !canAccessBatch">
+				<Button
+					v-if="
+						batch.data.paid_batch &&
+						batch.data.seats_left > 0 &&
+						batch.data.accept_enrollments
+					"
+					class="w-full mt-4"
+					variant="solid"
+					:route="{
+						name: 'Billing',
+						params: { type: 'batch', name: batch.data.name },
+					}"
+				>
+					<template #prefix>
+						<span class="lucide-credit-card size-4" />
+					</template>
+					<span>
+						{{ __('Register Now') }}
+					</span>
+				</Button>
+				<Button
+					variant="solid"
+					class="w-full mt-2"
+					v-else-if="
+						batch.data.allow_self_enrollment &&
+						batch.data.seats_left &&
+						batch.data.accept_enrollments
+					"
+					@click="enrollInBatch()"
+				>
+					<template #prefix>
+						<span class="lucide-graduation-cap size-4" />
+					</template>
+					{{ __('Enroll Now') }}
+				</Button>
+			</div>
+		</div>
+	</div>
+</template>
+<script setup>
+import { inject, computed } from 'vue'
+import { Badge, Button, createResource, toast } from 'frappe-ui'
+import {
+	formatNumberIntoCurrency,
+	formatTime,
+	getFormattedDateRange,
+} from '@/utils'
+import { formatTimezone, nextOccurrence } from '@/utils/timezone'
+import VideoPreview from '@/components/VideoPreview.vue'
+
+const user = inject('$user')
+const readOnlyMode = window.read_only_mode
+
+const props = defineProps({
+	batch: {
+		type: Object,
+		default: null,
+	},
+})
+
+const enroll = createResource({
+	url: 'lms.lms.utils.enroll_in_batch',
+	makeParams(values) {
+		return {
+			batch: props.batch.data.name,
+		}
+	},
+})
+
+const enrollInBatch = () => {
+	if (!user.data) {
+		window.location.href = `/login?redirect-to=/batches/${props.batch.data.name}`
+		return
+	}
+	enroll.submit(
+		{},
+		{
+			onSuccess(data) {
+				toast.success(__('You have been enrolled in this batch'))
+				// BatchOverlay lives on the batch detail page, so navigating there is a
+				// no-op. Refetch the batch instead: once `students` includes the user,
+				// BatchDetail swaps the enroll view for the enrolled one reactively.
+				props.batch.reload()
+			},
+			onError(err) {
+				toast.error(__(err.messages?.[0] || err))
+				console.error(err)
+			},
+		}
+	)
+}
+
+const isStudent = computed(() => {
+	return user.data ? Boolean(props.batch.data?.is_student) : false
+})
+
+const isModerator = computed(() => {
+	return user.data?.is_moderator
+})
+
+const isEvaluator = computed(() => {
+	return user.data?.is_evaluator
+})
+
+const canAccessBatch = computed(() => {
+	if (!user.data) {
+		return false
+	}
+	// can_manage is per-batch: a Course Creator only manages a batch they are
+	// tagged an instructor/evaluator on, unlike the global isModerator/isEvaluator.
+	return (
+		isModerator.value ||
+		isStudent.value ||
+		isEvaluator.value ||
+		Boolean(props.batch.data?.can_manage)
+	)
+})
+
+const isAdmin = computed(() => {
+	return isModerator.value || isEvaluator.value
+})
+</script>

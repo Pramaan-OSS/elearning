@@ -1,0 +1,227 @@
+# Copyright (c) 2021, Frappe and contributors
+# For license information, please see license.txt
+
+import random
+
+import frappe
+from frappe import _
+from frappe.desk.doctype.notification_log.notification_log import make_notification_logs
+from frappe.model.document import Document
+from frappe.utils import cint, flt, today
+
+from ...utils import (
+	generate_slug,
+	get_average_rating,
+	get_instructors,
+	get_lesson_count,
+	get_lms_route,
+	validate_attachable_file,
+	validate_image,
+)
+
+
+class LMSCourse(Document):
+	def validate(self):
+		self.validate_published()
+		self.validate_instructors()
+		self.validate_duplicate_instructors()
+		self.validate_video_link()
+		self.validate_status()
+		self.validate_certification()
+		self.validate_amount_and_currency()
+		validate_attachable_file(self, "image")
+		self.image = validate_image(self.image)
+		self.validate_card_gradient()
+
+	def validate_published(self):
+		if not self.published:
+			return
+		if self.is_new() or self.has_value_changed("published") or not self.published_on:
+			self.published_on = today()
+
+	def validate_instructors(self):
+		if self.is_new() and not self.instructors:
+			self.append("instructors", {"instructor": self.owner})
+
+	def validate_duplicate_instructors(self):
+		instructors = [row.instructor for row in self.instructors]
+		duplicates = {instructor for instructor in instructors if instructors.count(instructor) > 1}
+		if len(duplicates):
+			full_name = frappe.db.get_value("User", next(iter(duplicates)), "full_name")
+			frappe.throw(
+				_("Instructor {0} has already been added to this course.").format(frappe.bold(full_name))
+			)
+
+	def validate_video_link(self):
+		# Store video_link exactly as entered: a YouTube/Vimeo link or an uploaded
+		# file path. The frontend normalizes links for rendering (it handles full
+		# URLs and bare ids alike), so there's no need to strip URLs down to a bare
+		# id here. Stripping was lossy: it mangled uploaded /files paths and turned
+		# some YouTube urls into ids that don't round-trip cleanly.
+		return
+
+	def validate_status(self):
+		if self.published:
+			self.status = "Approved"
+
+
+	def validate_certification(self):
+		if self.enable_certification and self.paid_certificate:
+			frappe.throw(_("A course cannot have both paid certificate and certificate of completion."))
+
+		if self.paid_certificate and not self.evaluator:
+			frappe.throw(_("Evaluator is required for paid certificates."))
+
+		if self.paid_certificate and not self.timezone:
+			frappe.throw(_("Timezone is required for paid certificates."))
+
+	def validate_amount_and_currency(self):
+		if self.paid_course and (cint(self.course_price) <= 0 or not self.currency):
+			frappe.throw(_("Amount and currency are required for paid courses."))
+
+		if self.paid_certificate and (cint(self.course_price) <= 0 or not self.currency):
+			frappe.throw(_("Amount and currency are required for paid certificates."))
+
+	def validate_card_gradient(self):
+		if not self.image and not self.card_gradient:
+			colors = [
+				"Red",
+				"Blue",
+				"Green",
+				"Yellow",
+				"Orange",
+				"Pink",
+				"Amber",
+				"Violet",
+				"Cyan",
+				"Teal",
+				"Gray",
+				"Purple",
+			]
+			self.card_gradient = random.choice(colors)
+
+	def on_update(self):
+		if not self.upcoming and self.has_value_changed("upcoming"):
+			self.send_email_to_interested_users()
+
+	def send_email_to_interested_users(self):
+		interested_users = frappe.get_all("LMS Course Interest", {"course": self.name}, ["name", "user"])
+		subject = self.title + " is available!"
+		args = {
+			"title": self.title,
+			"course_link": get_lms_route(f"courses/{self.name}"),
+			"app_name": frappe.db.get_single_value("System Settings", "app_name"),
+			"site_url": frappe.utils.get_url(),
+		}
+
+		for user in interested_users:
+			args["first_name"] = frappe.db.get_value("User", user.user, "first_name")
+			email_args = frappe._dict(
+				recipients=user.user,
+				subject=subject,
+				header=[subject, "green"],
+				template="lms_course_interest",
+				args=args,
+				now=True,
+			)
+			frappe.enqueue(method=frappe.sendmail, queue="short", timeout=300, is_async=True, **email_args)
+			frappe.db.set_value("LMS Course Interest", user.name, "email_sent", True)
+
+	def autoname(self):
+		if not self.name:
+			self.name = generate_slug(self.title, "LMS Course")
+
+	def __repr__(self):
+		return f"<Course#{self.name}>"
+
+
+def send_notification_for_published_courses():
+	send_notification = frappe.db.get_single_value("LMS Settings", "send_notification_for_published_courses")
+	if not send_notification:
+		return
+
+	courses_published_today = frappe.get_all(
+		"LMS Course",
+		{
+			"published_on": today(),
+			"notification_sent": 0,
+		},
+		["name", "title", "short_introduction"],
+	)
+
+	if not courses_published_today:
+		return
+
+	if send_notification == "Email":
+		send_email_notification_for_published_courses(courses_published_today)
+	else:
+		send_system_notification_for_published_courses(courses_published_today)
+
+
+def send_email_notification_for_published_courses(courses):
+	brand_name = frappe.db.get_single_value("Website Settings", "app_name")
+	brand_logo = frappe.db.get_single_value("Website Settings", "banner_image")
+	subject = _("A new course has been published on {0}").format(brand_name)
+	template = "published_course_notification"
+	students = frappe.get_all("User", {"enabled": 1}, pluck="name")
+
+	for course in courses:
+		instructors = get_instructors("LMS Course", course.name)
+
+		args = {
+			"brand_logo": brand_logo,
+			"brand_name": brand_name,
+			"title": course.title,
+			"short_introduction": course.short_introduction,
+			"instructors": instructors,
+			"course_url": frappe.utils.get_url(get_lms_route(f"courses/{course.name}")),
+		}
+
+		frappe.sendmail(
+			recipients=instructors,
+			bcc=students,
+			subject=subject,
+			template=template,
+			args=args,
+		)
+		frappe.db.set_value("LMS Course", course.name, "notification_sent", 1)
+
+
+def send_system_notification_for_published_courses(courses):
+	for course in courses:
+		students = frappe.get_all("User", {"enabled": 1}, pluck="name")
+		instructors = frappe.get_all("Course Instructor", {"parent": course.name}, pluck="instructor")
+		instructor_name = frappe.db.get_value("User", instructors[0], "full_name")
+		notification = frappe._dict(
+			{
+				"subject": _("{0} has published a new course {1}").format(
+					frappe.bold(instructor_name), frappe.bold(course.title)
+				),
+				"email_content": _(
+					"A new course '{0}' has been published that might interest you. Check it out!"
+				).format(course.title),
+				"document_type": "LMS Course",
+				"document_name": course.name,
+				"from_user": instructors[0] if instructors else None,
+				"type": "Alert",
+				"link": get_lms_route(f"courses/{course.name}"),
+			}
+		)
+		make_notification_logs(notification, students)
+		frappe.db.set_value("LMS Course", course.name, "notification_sent", 1)
+
+
+def update_course_statistics():
+	courses = frappe.get_all("LMS Course", fields=["name"])
+
+	for course in courses:
+		lessons = get_lesson_count(course.name)
+		enrollments = frappe.db.count("LMS Enrollment", {"course": course.name, "member_type": "Student"})
+		avg_rating = get_average_rating(course.name) or 0
+		avg_rating = flt(avg_rating, frappe.get_system_settings("float_precision") or 3)
+
+		frappe.db.set_value(
+			"LMS Course",
+			course.name,
+			{"lessons": lessons, "enrollments": enrollments, "rating": avg_rating},
+		)

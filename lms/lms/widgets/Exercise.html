@@ -1,0 +1,15 @@
+<div class="exercise">
+  <h2>Exercise {{exercise.index_label}}: {{ exercise.title }}</h2>
+  <div class="exercise-description">{{frappe.utils.md_to_html(exercise.description)}}</div>
+
+  {% if exercise.image %}
+  <div class="exercise-image">{{exercise.image}}</div>
+  {% endif %}
+
+  {% set submission = exercise.get_user_submission() %}
+  {% if submission %}
+  <div class="exercise-submission">
+    <p>{{ _("Your latest submission is saved. Open the exercise to run it again.") }}</p>
+  </div>
+  {% endif %}
+</div>
