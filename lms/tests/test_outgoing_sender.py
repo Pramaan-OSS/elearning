@@ -1,9 +1,10 @@
 import json
-from unittest.mock import Mock, patch
 from types import SimpleNamespace
+from unittest.mock import Mock, patch
 
 import frappe
 from frappe.tests import IntegrationTestCase
+
 from lms.integrations import pramaan_mail
 
 

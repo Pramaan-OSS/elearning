@@ -13,3 +13,6 @@ e2e/playwright
 .env
 .env.*
 !.env.example
+
+.venv
+vendor

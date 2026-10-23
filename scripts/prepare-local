@@ -19,9 +19,7 @@ uv pip install --python .venv/bin/python --no-deps -e vendor/framework -e .
 mkdir -p .runtime/socket
 cp scripts/socket/package.json scripts/socket/package-lock.json .runtime/socket/
 npm --prefix .runtime/socket ci --no-audit --no-fund
-npm install --global --force yarn@1.22.22
-cd frontend
-yarn install --check-files
-yarn build
+npm ci --prefix frontend --ignore-scripts --no-audit --no-fund --legacy-peer-deps --install-links
+npm --prefix frontend run build
 cd "$root"
 .venv/bin/python -m py_compile lms/pramaan.py

@@ -277,7 +277,7 @@ export class CodeBox {
 	selectInput: HTMLInputElement
 	selectDropIcon: HTMLElement
 
-	constructor({ data, api, config, readOnly }) {
+	constructor({ data, api, config, readOnly }: { data: Partial<CodeBox['data']>; api: CodeBox['api']; config: Partial<CodeBox['config']>; readOnly: boolean }) {
 		this.api = api
 		this.readOnly = readOnly
 		this.config = {
@@ -379,7 +379,7 @@ export class CodeBox {
 			this.api.listeners.on(
 				this.codeArea,
 				'paste',
-				(event) => this._handleCodeAreaPaste(event),
+				(event: ClipboardEvent) => this._handleCodeAreaPaste(event),
 				false
 			)
 			this.api.listeners.on(
@@ -397,7 +397,7 @@ export class CodeBox {
 			this.api.listeners.on(
 				this.codeArea,
 				'blur',
-				(event) => this._onBlur(event),
+				(event: FocusEvent) => this._onBlur(event),
 				false
 			)
 		}
@@ -411,7 +411,7 @@ export class CodeBox {
 		return codeAreaHolder
 	}
 
-	save(blockContent) {
+	save(_blockContent: HTMLElement) {
 		// Canonical plain source, entity-escaped for storage, never the highlighted DOM.
 		return Object.assign({}, this.data, {
 			code: escapeForStorage(this.data.code),
@@ -419,7 +419,7 @@ export class CodeBox {
 		})
 	}
 
-	validate(savedData) {
+	validate(savedData: CodeBox['data']) {
 		if (!savedData.code.trim()) return false
 		return true
 	}
@@ -441,19 +441,19 @@ export class CodeBox {
 		this.api.listeners.off(
 			this.codeArea,
 			'blur',
-			(event) => this._onBlur(event),
+			(event: FocusEvent) => this._onBlur(event),
 			false
 		)
 		this.api.listeners.off(
 			this.codeArea,
 			'paste',
-			(event) => this._handleCodeAreaPaste(event),
+			(event: ClipboardEvent) => this._handleCodeAreaPaste(event),
 			false
 		)
 		this.api.listeners.off(
 			this.selectInput,
 			'click',
-			(event) => this._handleSelectInputClick(event),
+			(event: MouseEvent) => this._handleSelectInputClick(event),
 			false
 		)
 	}
@@ -482,7 +482,7 @@ export class CodeBox {
 		this.api.listeners.on(
 			this.selectInput,
 			'click',
-			(event) => this._handleSelectInputClick(event),
+			(event: MouseEvent) => this._handleSelectInputClick(event),
 			false
 		)
 
@@ -499,7 +499,7 @@ export class CodeBox {
 			this.api.listeners.on(
 				selectItem,
 				'click',
-				(event) => this._handleSelectItemClick(event, language),
+				(event: MouseEvent) => this._handleSelectItemClick(event, language),
 				false
 			)
 
@@ -568,12 +568,12 @@ export class CodeBox {
 		selection.addRange(range)
 	}
 
-	_onBlur(event) {
+	_onBlur(event: FocusEvent) {
 		this._captureSource()
 		this._highlightCodeArea(event)
 	}
 
-	_highlightCodeArea(event?) {
+	_highlightCodeArea(_event?: Event) {
 		// Highlight by the chosen language only; hljs.highlight escapes the source.
 		const result = hljs.highlight(this.data.code, {
 			language: resolveCodeBoxLanguage(this.data.language),
@@ -583,7 +583,7 @@ export class CodeBox {
 		this.highlighted = true
 	}
 
-	_handleCodeAreaPaste(event) {
+	_handleCodeAreaPaste(event: ClipboardEvent) {
 		// Insert the plain-text payload only, with no outside styling.
 		event.preventDefault()
 		event.stopPropagation()
@@ -615,15 +615,15 @@ export class CodeBox {
 		selection.addRange(range)
 	}
 
-	_handleSelectInputClick(event) {
-		event.target.nextSibling.classList.toggle('codeBoxShow')
+	_handleSelectInputClick(event: MouseEvent) {
+		(event.target as HTMLElement).nextElementSibling?.classList.toggle('codeBoxShow')
 	}
 
-	_handleSelectItemClick(event, language) {
-		event.target.parentNode.parentNode.querySelector(
-			'.codeBoxSelectInput'
-		).value = language[1]
-		event.target.parentNode.classList.remove('codeBoxShow')
+	_handleSelectItemClick(event: MouseEvent, language: [string, string]) {
+		const target = event.target as HTMLElement
+		const input = target.parentElement?.parentElement?.querySelector<HTMLInputElement>('.codeBoxSelectInput')
+		if (input) input.value = language[1]
+		target.parentElement?.classList.remove('codeBoxShow')
 		this.codeArea.removeAttribute('class')
 		this.data.language = language[0]
 		this.codeArea.setAttribute(

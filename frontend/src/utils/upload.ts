@@ -6,7 +6,6 @@ import UploadPlugin from '@/components/UploadPlugin.vue'
 import { h, createApp } from 'vue'
 import type { App } from 'vue'
 import { Upload as UploadIcon } from 'lucide-vue-next'
-// @ts-expect-error utils/dialogs.js has no type declarations yet
 import { createDialog } from '@/utils/dialogs'
 import { usesWebkitPdfViewer } from '@/utils/pdfViewer'
 import { embedFrame } from '@/utils/blockDom'

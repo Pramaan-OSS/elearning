@@ -12,7 +12,6 @@ from frappe.utils import add_days, cint, generate_hash, get_time, nowdate
 from pypika.terms import LiteralValue
 
 from lms.integrations.conferencing import end_user_ref, get_meeting_app, meeting_start
-
 from lms.lms.permissions import (
 	administrable_assessment_names,
 	authored_batch_condition,
@@ -306,7 +305,6 @@ def create_live_class(
 	check_can_schedule_live_class(batch_name)
 
 	from lms.integrations.conferencing import client as mail_client
-
 	from lms.pramaan import PramaanError
 
 	meeting_app = get_meeting_app()

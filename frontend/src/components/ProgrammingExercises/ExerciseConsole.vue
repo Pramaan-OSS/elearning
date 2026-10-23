@@ -65,10 +65,8 @@
 </template>
 
 <script lang="ts">
-export type ConsoleLine = {
-	text: string
-	stream: 'stdout' | 'stderr' | 'command'
-}
+export type { ConsoleLine } from '@/types/programmingExercises'
+import type { ConsoleLine } from '@/types/programmingExercises'
 </script>
 
 <script setup lang="ts">

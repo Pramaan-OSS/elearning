@@ -7,7 +7,6 @@ import { sidebarSettingsPage } from '@/components/Settings/Sidebar/sidebar'
 // BrandSettings.vue is still `<script setup>` with no `lang="ts"`, so a TS
 // importer gets TS7016; only settingsStructure.js reached it before. Clears
 // itself once the component is converted.
-// @ts-expect-error TS7016: untyped SFC
 import BrandSettings from '@/components/Settings/BrandSettings.vue'
 import Coupons from '@/components/Settings/Coupons/Coupons.vue'
 import { transactionsPage } from '@/components/Settings/Transactions/transactions'

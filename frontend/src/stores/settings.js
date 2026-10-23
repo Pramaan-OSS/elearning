@@ -5,7 +5,7 @@ import { createResource } from 'frappe-ui'
 export const useSettings = defineStore('settings', () => {
 	const isSettingsOpen = ref(false)
 	const isCommandPaletteOpen = ref(false)
-	const activeTab = ref(null)
+	const activeTab = ref(/** @type {string | null} */ (null))
 
 	// Settings is the desktop dialog and has no route of its own, so it is
 	// mounted only inside the desktop sidebar's UserDropdown. On a phone nothing

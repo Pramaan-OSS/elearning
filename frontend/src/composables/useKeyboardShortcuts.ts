@@ -1,6 +1,5 @@
 import { onBeforeUnmount, onMounted, unref } from 'vue'
 import type { Ref } from 'vue'
-// @ts-expect-error utils/dialogs.js has no type declarations yet
 import { isDialogOpen } from '@/utils/dialogs'
 import { ASSESSMENT_BLOCK_SELECTOR } from '@/utils/blockMount'
 

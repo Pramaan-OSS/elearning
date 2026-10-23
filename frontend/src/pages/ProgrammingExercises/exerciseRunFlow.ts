@@ -1,5 +1,5 @@
-import type { TestCaseResult } from '@/components/ProgrammingExercises/ExerciseTestCases.vue'
-import type { ConsoleLine } from '@/components/ProgrammingExercises/ExerciseConsole.vue'
+import type { TestCaseResult } from '@/types/programmingExercises'
+import type { ConsoleLine } from '@/types/programmingExercises'
 
 // Keep in sync with BOILERPLATE in lms/lms/code_runner.py, which strips it before storing.
 const BOILERPLATE: Record<string, string> = {

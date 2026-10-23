@@ -95,15 +95,8 @@
 </template>
 
 <script lang="ts">
-export type TestCaseResult = {
-	idx: number
-	status: 'Passed' | 'Failed'
-	hidden: number
-	input?: string
-	output: string
-	expected_output: string | null
-	elapsed: number | null
-}
+export type { TestCaseResult } from '@/types/programmingExercises'
+import type { TestCaseResult } from '@/types/programmingExercises'
 </script>
 
 <script setup lang="ts">

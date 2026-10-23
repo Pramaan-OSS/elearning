@@ -4,7 +4,7 @@ import { registerDirectives } from '@/directives'
 import { usersStore } from '@/stores/user'
 import translationPlugin from '@/translation'
 import AssessmentBlockPreview from '@/components/Assessment/AssessmentBlockPreview.vue'
-import type { PreviewKind } from '@/components/Assessment/AssessmentBlockPreview.vue'
+import type { PreviewKind } from '@/types/quiz'
 
 const ASSESSMENT_BLOCK_ATTRIBUTE = 'data-assessment-block'
 export const ASSESSMENT_BLOCK_SELECTOR = `[${ASSESSMENT_BLOCK_ATTRIBUTE}]`

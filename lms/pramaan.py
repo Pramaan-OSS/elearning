@@ -1,15 +1,15 @@
 """All outside service calls go through this server-side module."""
 
-from dataclasses import dataclass
+import copy
 import json
 import math
-import copy
 import os
 import time
 import uuid
-from urllib.parse import quote, urlparse
-from urllib.request import Request, build_opener, HTTPRedirectHandler
+from dataclasses import dataclass
 from urllib.error import HTTPError, URLError
+from urllib.parse import quote, urlparse
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 
 class PramaanError(RuntimeError):
@@ -133,15 +133,15 @@ def _schema_json(value, label, path="#", stack=None, depth=0):
     stack = set() if stack is None else stack
     if depth > 32:
         raise InvalidGenerationRequest(label, path, "JSON value is too deep")
-    if value is None or isinstance(value, (str, bool, int)):
+    if value is None or isinstance(value, str | bool | int):
         return
     if isinstance(value, float) and math.isfinite(value):
         return
-    if not isinstance(value, (dict, list)) or id(value) in stack:
+    if not isinstance(value, dict | list) or id(value) in stack:
         raise InvalidGenerationRequest(label, path, "must contain finite JSON values without cycles")
     stack.add(id(value))
     for key, item in (value.items() if isinstance(value, dict) else enumerate(value)):
-        if not isinstance(key, (str, int)) or isinstance(value, dict) and not isinstance(key, str):
+        if not isinstance(key, str | int) or isinstance(value, dict) and not isinstance(key, str):
             raise InvalidGenerationRequest(label, path, "property names must be strings")
         _schema_json(item, label, _schema_path(path, key), stack, depth + 1)
     stack.remove(id(value))
@@ -194,7 +194,7 @@ def validate_json_schema(value, label="Response"):
                 fail(key, "must be an object")
             if key == "required" and (not isinstance(item, list) or any(not isinstance(t, str) for t in item) or len(set(item)) != len(item)):
                 fail(key, "must be distinct property names")
-            if key == "additionalProperties" and not isinstance(item, (bool, dict)):
+            if key == "additionalProperties" and not isinstance(item, bool | dict):
                 fail(key, "must be boolean or a schema")
             if key in {"anyOf", "enum"} and (not isinstance(item, list) or not 1 <= len(item) <= (16 if key == "anyOf" else 256)):
                 fail(key, "exceeds branch or value limit")
@@ -202,7 +202,7 @@ def validate_json_schema(value, label="Response"):
                 fail(key, "must be a string")
             if key == "examples" and not isinstance(item, list):
                 fail(key, "must be an array")
-            if key in SCHEMA_BOUNDS and (isinstance(item, bool) or not isinstance(item, (int, float)) or isinstance(item, float) and not math.isfinite(item) or key in {"minLength", "maxLength", "minItems", "maxItems"} and (not isinstance(item, int) or item < 0)):
+            if key in SCHEMA_BOUNDS and (isinstance(item, bool) or not isinstance(item, int | float) or isinstance(item, float) and not math.isfinite(item) or key in {"minLength", "maxLength", "minItems", "maxItems"} and (not isinstance(item, int) or item < 0)):
                 fail(key, "invalid bound")
         for child, child_path in children(node, path):
             walk(child, child_path, depth + 1)

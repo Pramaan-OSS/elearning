@@ -226,6 +226,8 @@ class CheckoutAddressTests(unittest.TestCase):
         opener = Mock()
         opener.open.side_effect = HTTPError('https://api.invalid', 400, 'Bad Request', {}, io.BytesIO(raw))
         c = boundary.PramaanClient(api_key='fake')
+        # This exercises HTTP decoding through a mocked opener even in fake mode.
+        c._transport = c._http
         with patch.object(boundary, 'build_opener', return_value=opener):
             with self.assertRaises(boundary.PublicCheckoutAddressRequired) as raised:
                 c.call('payments.checkout.create', {}, idempotency_key='local-checkout')

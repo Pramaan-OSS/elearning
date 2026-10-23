@@ -9,7 +9,7 @@ __pycache__/
 *.py[cod]
 *$py.class
 node_modules
-package-lock.json
+/package-lock.json
 lms/public/frontend
 lms/www/lms.html
 lms/www/_lms.html
@@ -26,3 +26,7 @@ playwright/.auth
 .runtime/
 .scratch/
 vendor/
+
+# Locked frontend dependencies used by CI
+!frontend/package-lock.json
+.venv/

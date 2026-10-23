@@ -47,6 +47,7 @@ declare module 'vue' {
     CourseOverviewSection: typeof import('./src/components/Courses/CourseOverviewSection.vue')['default']
     CourseReviews: typeof import('./src/components/CourseReviews.vue')['default']
     CourseThumbnailField: typeof import('./src/components/Courses/CourseThumbnailField.vue')['default']
+    CourseTranslationDraft: typeof import('./src/components/Courses/CourseTranslationDraft.vue')['default']
     CreateOutline: typeof import('./src/components/CreateOutline.vue')['default']
     DeleteConfirmDialog: typeof import('./src/components/Settings/Raven/DeleteConfirmDialog.vue')['default']
     DesktopLayout: typeof import('./src/components/Layouts/pages/desktop/DesktopLayout.vue')['default']

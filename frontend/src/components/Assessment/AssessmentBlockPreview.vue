@@ -157,7 +157,8 @@ import QuizStats from '@/components/Assessment/QuizStats.vue'
 import { attemptsAllowedLabel, formatQuizSubtitle } from '@/utils/quizSummary'
 import type { QuizDetails } from '@/types/quiz'
 
-export type PreviewKind = 'quiz' | 'assignment' | 'exercise'
+import type { PreviewKind } from '@/types/quiz'
+export type { PreviewKind } from '@/types/quiz'
 
 type AssignmentSummary = { title: string; question: string; type: string }
 type ExerciseSummary = {

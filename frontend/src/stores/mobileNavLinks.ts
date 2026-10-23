@@ -63,7 +63,7 @@ const addPrograms = async (
 	if (sidebarLinks.value.some((link) => link.label === 'Programs')) return
 	if (!viewer.isSignedIn) return
 	if (!viewer.isModerator && !viewer.isInstructor) {
-		const programs = await call('lms.lms.utils.get_programs')
+		const programs = await call<{ enrolled: unknown[]; published: unknown[] }>('lms.lms.utils.get_programs')
 		if (!isCurrent()) return
 		if (!programs.enrolled.length && !programs.published.length) return
 	}

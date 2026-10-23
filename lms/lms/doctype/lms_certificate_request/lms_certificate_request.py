@@ -257,9 +257,10 @@ def create_evaluation_meeting(evaluation: dict) -> str | None:
 	Returns the learner's join link, or None when conferencing is not set up;
 	the booking still goes through and the link can be added later.
 	"""
+	from frappe.utils import time_diff_in_seconds
+
 	from lms.integrations.conferencing import client, end_user_ref, get_meeting_app, meeting_start
 	from lms.pramaan import PramaanError
-	from frappe.utils import time_diff_in_seconds
 
 	meeting_app = get_meeting_app()
 	if not meeting_app:

@@ -1,9 +1,9 @@
+import type { TunesMenuConfig } from '@editorjs/editorjs/types/tools/tool-settings'
 import type {
 	API,
 	BlockAPI,
 	BlockToolData,
 	BlockTune,
-	TunesMenuConfig,
 } from '@editorjs/editorjs'
 // EditorJS popover takes icons as HTML strings, so use lucide-static raw SVGs
 // (the lucide-vue-next components can't render here).

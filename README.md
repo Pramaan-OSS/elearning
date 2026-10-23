@@ -1,3 +1,5 @@
+[![CI](https://github.com/Pramaan-OSS/elearning/actions/workflows/ci.yml/badge.svg)](https://github.com/Pramaan-OSS/elearning/actions/workflows/ci.yml)
+
 # eLearning
 
 An open source learning management system: publish courses, run live batches,

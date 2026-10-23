@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite",
     "serve": "vite preview",
-    "build": "vite build --base=/assets/lms/frontend/ && yarn copy-html-entry && yarn build:signup-select",
+    "build": "vite build --base=/assets/lms/frontend/ && npm run copy-html-entry && npm run build:signup-select",
     "build:signup-select": "vite build --config vite.signup-select.config.js",
     "copy-html-entry": "cp ../lms/public/frontend/index.html ../lms/www/_lms.html",
     "test": "vitest run",
@@ -53,6 +53,7 @@
   },
   "devDependencies": {
     "@codemirror/language": "^6.0.0",
+    "@types/node": "24.19.2",
     "@vitejs/plugin-vue": "5.0.3",
     "@vue/test-utils": "^2.4.10",
     "autoprefixer": "10.4.2",

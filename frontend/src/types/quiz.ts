@@ -101,3 +101,5 @@ export interface StoredViolationRow {
 	timestamp: string
 	frame: string | null
 }
+
+export type PreviewKind = 'quiz' | 'assignment' | 'exercise'

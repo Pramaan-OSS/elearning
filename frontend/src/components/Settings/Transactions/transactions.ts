@@ -2,7 +2,6 @@ import { call, toast } from 'frappe-ui'
 import type { FrappeResourceError } from 'frappe-ui'
 import { markRaw } from 'vue'
 import router from '@/router'
-// @ts-expect-error utils/dialogs.js is still plain JS, so it has no declarations
 import { createDialog } from '@/utils/dialogs'
 import Transactions from '@/components/Settings/Transactions/Transactions.vue'
 import { usePermissions } from '@/composables/usePermissions'

@@ -2,7 +2,6 @@ import json
 from unittest.mock import patch
 
 import frappe
-from lms.pramaan import PramaanError
 from frappe.client import get as client_get
 from frappe.client import get_list as client_get_list
 
@@ -16,6 +15,7 @@ from lms.lms.code_runner import BOILERPLATE, RunnerUnavailable, run_on_platform
 from lms.lms.course_import_export import build_assessment_doc
 from lms.lms.test_helpers import BaseTestUtils
 from lms.patches.v2_0 import unhide_existing_test_cases as unhide_patch
+from lms.pramaan import PramaanError
 
 
 # Guards hidden-by-default cases, starter code, import visibility, the backfill.

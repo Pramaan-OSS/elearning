@@ -7,7 +7,7 @@ import frappe
 from frappe import _
 from frappe.model.document import Document
 from frappe.query_builder import Bracket
-from frappe.utils import cint, format_date, format_time, get_datetime, generate_hash, nowdate
+from frappe.utils import cint, format_date, format_time, generate_hash, get_datetime, nowdate
 from pypika.terms import LiteralValue
 
 from lms.integrations.conferencing import client, get_site_inbox

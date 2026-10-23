@@ -25,8 +25,8 @@ def default_sender():
 
 
 def addresses(value):
-    values = value if isinstance(value, (list, tuple)) else [value or ""]
-    return list(dict.fromkeys(address for _, address in getaddresses(values) if address))
+    values = value if isinstance(value, list | tuple) else [value or ""]
+    return list(dict.fromkeys(address for _name, address in getaddresses(values) if address))
 
 
 def install_transport(*args, **kwargs):

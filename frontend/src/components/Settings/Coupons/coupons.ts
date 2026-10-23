@@ -1,4 +1,3 @@
-// @ts-expect-error utils/dialogs.js is still plain JS, so it has no declarations
 import { createDialog } from '@/utils/dialogs'
 import {
 	deleteRow,

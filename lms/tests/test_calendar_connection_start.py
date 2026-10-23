@@ -1,6 +1,8 @@
 from unittest.mock import patch
+
 import frappe
 from frappe.tests import IntegrationTestCase
+
 from lms.lms import api
 from lms.pramaan import PramaanClient
 

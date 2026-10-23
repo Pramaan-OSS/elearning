@@ -5,7 +5,6 @@ import {
 	type RouteLocationNormalizedLoaded,
 	type Router,
 } from 'vue-router'
-// @ts-expect-error stores/settings is still plain JS, so it has no declarations
 import { useSettings } from '@/stores/settings'
 import type {
 	SettingsRoutableGroup,

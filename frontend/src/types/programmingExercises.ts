@@ -40,3 +40,18 @@ export type ProgrammingExercises = {
 		submit: (name: string, options?: { onSuccess?: () => void }) => void
 	}
 }
+
+export type TestCaseResult = {
+	idx: number
+	status: 'Passed' | 'Failed'
+	hidden: number
+	input?: string
+	output: string
+	expected_output: string | null
+	elapsed: number | null
+}
+
+export type ConsoleLine = {
+	text: string
+	stream: 'stdout' | 'stderr' | 'command'
+}
