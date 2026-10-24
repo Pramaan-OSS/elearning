@@ -51,8 +51,8 @@ for name, source in [
     link = assets / name
     if not link.exists():
         link.symlink_to(source, target_is_directory=True)
-if not (assets / "assets.json").exists():
-    (assets / "assets.json").write_text("{}")
+# The list persists in the sites volume; the bundles belong to this image.
+(assets / "assets.json").write_text((ROOT / "review/built-assets.json").read_text())
 bench("--site", SITE, "migrate")
 bench("--site", SITE, "enable-scheduler")
 from lms.pramaan import PramaanClient
