@@ -333,6 +333,7 @@ def create_live_class(
 			"start_url": room.get("hostUrl") or "",
 			"join_url": room.get("joinUrl") or "",
 			"meeting_id": room.get("ref") or "",
+			"meeting_end_user_ref": payload["endUserRef"],
 			"uuid": room.get("ref") or "",
 			"title": title,
 			"host": frappe.session.user,

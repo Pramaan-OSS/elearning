@@ -4,95 +4,34 @@
 		:title="__('Attendance for Class - {0}').format(live_class?.title)"
 		size="4xl"
 	>
-		<template #default>
-			<div
-				class="grid grid-cols-2 gap-12 text-sm-semibold text-ink-gray-6 pb-2"
-			>
-				<div>
-					{{ __('Member') }}
-				</div>
-				<div class="grid grid-cols-3 gap-20">
-					<div>
-						{{ __('Joined at') }}
-					</div>
-					<div class="text-center">
-						{{ __('Left at') }}
-					</div>
-					<div>
-						{{ __('Attended for') }}
-					</div>
-				</div>
-			</div>
-			<div class="divide-y text-base">
-				<component
-					:is="participant.member_username ? 'router-link' : 'div'"
-					v-for="participant in participants.data"
-					:key="participant.name"
-					:to="profileRoute(participant.member_username)"
-					class="grid grid-cols-2 items-center w-full text-base w-fit py-2"
-				>
-					<div class="flex items-center gap-x-3">
-						<Avatar
-							:image="participant.member_image"
-							:label="participant.member_name"
-							size="xl"
-						/>
-						<div class="space-y-1">
-							<div class="font-medium">
-								{{ participant.member_name }}
-							</div>
-							<div>
-								{{ participant.member }}
-							</div>
-						</div>
-					</div>
-
-					<div class="grid grid-cols-3 gap-20 text-end">
-						<div>
-							{{ dayjs(participant.joined_at).format('HH:mm a') }}
-						</div>
-						<div>
-							{{ dayjs(participant.left_at).format('HH:mm a') }}
-						</div>
-						<div>{{ participant.duration }} {{ __('minutes') }}</div>
-					</div>
-				</component>
-			</div>
+        <template #default>
+            <p>{{ __('Not yet live-verified. Display names are not verified learner identities.') }}</p>
+            <Button @click="load" :loading="loading">{{ __('Refresh attendance') }}</Button>
+            <p role="alert">{{ message }}</p>
+            <table v-if="rows.length" class="w-full text-sm">
+                <thead><tr><th>{{ __('Participant name') }}</th><th>{{ __('Joined at') }}</th><th>{{ __('Left at') }}</th><th>{{ __('Seconds attended') }}</th></tr></thead>
+                <tbody><tr v-for="(row, index) in rows" :key="index"><td>{{ row.name }}</td><td>{{ row.joinedAt }}</td><td>{{ row.leftAt }}</td><td>{{ row.durationSeconds }}</td></tr></tbody>
+            </table>
 		</template>
 	</Dialog>
 </template>
-<script setup lang="ts">
-import { Avatar, createListResource, Dialog } from 'frappe-ui'
-import { inject } from 'vue'
-import { profileRoute } from '@/utils/routes'
-
+<script setup>
+import { Button, call, Dialog } from 'frappe-ui'
+import { ref, watch } from 'vue'
 const show = defineModel()
-const dayjs = inject('$dayjs')
-
-interface LiveClass {
-	name: String
-	title: String
+const props = defineProps({live_class: Object})
+const rows = ref([])
+const loading = ref(false)
+const message = ref('')
+const load = async () => {
+ if (!props.live_class?.name) return
+ rows.value = []; loading.value = true; message.value = ''
+ try {
+  const report = await call('lms.integrations.attendance.report', {live_class: props.live_class.name})
+  rows.value = report.results
+  message.value = report.availability === 'processing' ? __('Attendance is still processing. Try after the class ends.') : report.availability === 'no_data' ? __('No attendance data is available. This does not mean nobody attended.') : !rows.value.length ? __('The report contains no completed sessions.') : ''
+ } catch {message.value = __('Attendance is not available yet, or you do not have access.')}
+ finally {loading.value = false}
 }
-
-const props = defineProps<{
-	live_class: LiveClass | null
-}>()
-
-const participants = createListResource({
-	doctype: 'LMS Live Class Participant',
-	filters: {
-		live_class: props.live_class?.name,
-	},
-	fields: [
-		'name',
-		'member',
-		'member_name',
-		'member_image',
-		'member_username',
-		'joined_at',
-		'left_at',
-		'duration',
-	],
-	auto: true,
-})
+watch(() => [show.value, props.live_class?.name], () => {if(show.value) load()}, {immediate: true})
 </script>

@@ -84,6 +84,8 @@ SURFACES = {
     "code.": "The code runner",
     "security.ip.": "Address lookup",
     "auth.social.": "Connected sign-in",
+    "auth.app-invitation.": "Invitations",
+    "media.stock-photos.": "Photo search",
     "apps.": "Connected apps",
     "llm.": "Writing help",
 }
@@ -121,7 +123,7 @@ SCHEMA_KEYS = frozenset({"type", "properties", "required", "additionalProperties
 SCHEMA_TYPES = frozenset({"object", "array", "string", "number", "integer", "boolean", "null"})
 SCHEMA_BOUNDS = frozenset({"minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum",
     "minLength", "maxLength", "minItems", "maxItems"})
-UNAVAILABLE_CODES = frozenset({"upstream_unavailable", "not_available_yet", "not_available",
+UNAVAILABLE_CODES = frozenset({"not_found", "upstream_unavailable", "not_available_yet", "not_available",
     "capability_unavailable", "not_implemented", "unsupported_capability"})
 
 
@@ -307,7 +309,9 @@ class PramaanClient:
         "calendar.free-busy.get", "calendar.calendar.update",
         "payments.checkout.create", "payments.checkout.get", "payments.payment-link.create",
         "finance.exchange-rate.get", "code.run", "code.languages.list",
-        "security.ip.lookup", "auth.social.exchange", "llm.complete", "llm.chat",
+        "security.ip.lookup", "auth.social.start", "auth.app-invitation.create",
+        "auth.app-invitation.accept", "meetings.room.attendance.list", "media.stock-photos.search",
+        "auth.social.exchange", "llm.complete", "llm.chat",
         "text.translate", "audio.transcribe",
         "apps.connections.list", "apps.connection.start",
     })
@@ -318,7 +322,8 @@ class PramaanClient:
         "calendar.event.create", "calendar.event.update", "calendar.event.delete",
         "calendar.calendar.update",
         "payments.checkout.create", "payments.payment-link.create",
-        "code.run", "apps.connection.start",
+        "code.run", "apps.connection.start", "auth.social.start",
+        "auth.app-invitation.create", "auth.app-invitation.accept",
     })
 
     def __init__(self, *, api_key=None, base_url=None, transport=None, sleep=time.sleep):
@@ -344,8 +349,8 @@ class PramaanClient:
 
     @staticmethod
     def _fake(method, url, headers, body):
-        # Explicit local fixture mode has no network transport or outside effects.
-        return 503, {"error": {"code": "upstream_unavailable", "retryable": False}}
+        from lms.integrations.adoption_fake import transport
+        return transport(method, url, headers, body)
 
     def _http(self, method, url, headers, body):
         if isinstance(body, bytes):
@@ -506,13 +511,17 @@ class PramaanClient:
 
     def exchange_social_sign_in(self, *, provider_key: str | None = None, code: str,
                                 redirect_uri: str, pkce_verifier: str | None = None,
-                                expected_nonce: str | None = None) -> dict:
+                                expected_nonce: str | None = None, start_ref: str | None = None,
+                                state: str | None = None) -> dict:
         """Redeem a single-use sign-in code for verified identity claims.
 
         Upstream credentials never pass through here: the platform returns
         claims only, and the application keeps no authorization secrets.
         """
         inputs = {"code": code, "redirectUri": redirect_uri}
+        if start_ref:
+            inputs["startRef"] = start_ref
+            inputs["state"] = state
         if provider_key:
             inputs["providerKey"] = provider_key
         if pkce_verifier:

@@ -62,3 +62,28 @@ licence text and copyright notices are preserved in `LICENSE-ORIGINAL`.
 
 Course checkout and reminder payment links use `PRAMAAN_TAX_CATEGORY` from `.env`,
 defaulting to `edtech`. This is the single tax classification setting for payments.
+
+### Adopted capabilities (not yet live-verified)
+
+Local password access remains available. To offer hosted connected sign-in, set
+`pramaan_social_providers` in the site's private configuration to an array of the
+connected sign-in keys (`google`, `microsoft`). Register the exact HTTPS callback
+`/api/method/lms.integrations.social.callback` on the connected sign-in account.
+A local HTTP installation cannot start hosted sign-in.
+
+Staff with the System Manager or Moderator role can send account invitations
+from Members → Send an account invitation (`/invitations`). Configure the site's
+public HTTPS address and the builder's verified sending domain first. Recipients
+accept at `/invitation`, then use local Forgot password to set their password.
+Existing accounts receive no extra roles from an invitation retry.
+
+Class instructors can refresh attendance from the existing attendance dialog;
+the hourly job also records completed reports. Reports contain unverified display
+names and completed sessions, not learner identity or absence decisions. Every
+class calendar write requires a hidden guest list. Cover-image search now returns
+licensed stock photos with visible photographer, source and licence credits.
+
+Offline checks use `PRAMAAN_FAKE=1`; the default fixture answers unavailable.
+`PRAMAAN_FAKE_ADOPTION=success`, `refused`, `no_data` or `processing` selects an
+explicit adoption fixture. An empty key still prevents outside requests. Never
+use fixture settings as evidence of live availability.

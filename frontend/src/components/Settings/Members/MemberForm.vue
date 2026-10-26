@@ -20,6 +20,7 @@
 			<LoadingIndicator class="size-5 text-ink-gray-5" />
 		</div>
 		<div v-else data-testid="member-fields" class="space-y-4">
+            <a href="/invitations" class="underline">{{ __("Send an account invitation") }}</a>
 			<div class="grid grid-cols-2 gap-4">
 				<FormControl
 					v-model="member.first_name"

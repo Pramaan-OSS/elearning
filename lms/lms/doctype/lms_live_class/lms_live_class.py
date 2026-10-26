@@ -116,10 +116,11 @@ def event_body(cls, attendees=None, send_invites=False):
 		"inbox": get_site_inbox(required=True),
 		"title": f"Live Class on {cls.title}",
 		"start": start,
-		"end": get_datetime(start) + timedelta(minutes=cint(cls.duration)),
+		"end": (get_datetime(start) + timedelta(minutes=cint(cls.duration))).strftime("%Y-%m-%dT%H:%M:%S"),
 		"timezone": cls.timezone or None,
 		"description": cls.build_event_description(),
 		"sendInvites": send_invites,
+		"guestListHidden": True,
 	}
 	if attendees:
 		body["attendees"] = [{"email": email} for email in attendees]
@@ -129,8 +130,8 @@ def event_body(cls, attendees=None, send_invites=False):
 def create_platform_event(cls):
 	"""Put the class on the site's calendar so hosts get their invites.
 
-	Nothing is hidden here: every attendee can see the others (the platform has
-	no hidden-guest option yet). A failure leaves the class live and marked for
+	Hidden guests are required on every creation and update. A refusal leaves
+	the class live and marked for
 	the scheduler, which retries with the learners.
 	"""
 	if not get_site_inbox():

@@ -214,6 +214,7 @@ scheduler_events = {
 		"lms.lms.doctype.lms_live_class.lms_live_class.retry_pending_invites",
 	],
 	"hourly": [
+		"lms.integrations.attendance.refresh_completed",
 		"lms.lms.doctype.lms_certificate_request.lms_certificate_request.schedule_evals",
 		"lms.lms.doctype.lms_course.lms_course.update_course_statistics",
 		"lms.lms.doctype.lms_certificate_request.lms_certificate_request.mark_eval_as_completed",

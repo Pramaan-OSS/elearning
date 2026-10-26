@@ -28,20 +28,49 @@
 							</div>
 						</template>
 					</FileUploader>
-					<!-- Image search is not available yet: covers come from the
-					     person's own uploads. -->
-					<div
-						class="mt-2 w-[25.5rem] rounded-4 border border-dashed p-4 text-center text-sm text-ink-gray-6"
-					>
-						{{ __('Image search is not available yet. Upload your own image.') }}
-					</div>
+                    <form @submit.prevent="searchPhotos" class="mt-3">
+                        <label for="cover-photo-query">{{ __('Search licensed photos') }}</label>
+                        <input id="cover-photo-query" v-model="query" class="w-full rounded border p-2" required maxlength="300">
+                        <Button type="submit" :loading="searching">{{ __('Search photos') }}</Button>
+                    </form>
+                    <p class="text-sm">{{ __('Not yet live-verified') }}</p>
+                    <p role="alert">{{ photoMessage }}</p>
+                    <div class="max-h-80 overflow-auto">
+                        <div v-for="photo in photos" :key="photo.url" class="my-3">
+                            <button type="button" @click="emit('select', safeUrl(photo.url))"><img :src="safeUrl(photo.previewUrl)" :alt="photo.attribution" class="h-24 w-full object-cover"></button>
+                            <p>{{ photo.attribution }} — <a :href="safeUrl(photo.authorUrl)" target="_blank" rel="noopener noreferrer">{{ photo.author }}</a></p>
+                            <a :href="safeUrl(photo.sourceCreditUrl)" target="_blank" rel="noopener noreferrer">{{ photo.sourceCredit }}</a> ·
+                            <a :href="safeUrl(photo.sourceUrl)" target="_blank" rel="noopener noreferrer">{{ __('Source') }}</a> ·
+                            <a :href="safeUrl(photo.licenceUrl)" target="_blank" rel="noopener noreferrer">{{ photo.licence }}</a>
+                        </div>
+                        <Button v-if="nextPage" @click="searchPhotos(nextPage)">{{ __('More photos') }}</Button>
+                    </div>
 				</div>
 			</div>
 		</template>
 	</Popover>
 </template>
 <script setup>
-import { Popover, FileUploader, Button } from 'frappe-ui'
+import { Popover, FileUploader, Button, call } from 'frappe-ui'
+import { ref } from 'vue'
+import { safeUrl } from '@/utils/safeUrl'
+const query = ref('')
+const photos = ref([])
+const nextPage = ref(null)
+const photoMessage = ref('')
+const searching = ref(false)
+let lastQuery = ''
+const searchPhotos = async (page = 1) => {
+ if(typeof page !== 'number' || query.value !== lastQuery) page = 1
+ searching.value = true; photoMessage.value = ''
+ try {
+  const result = await call('lms.integrations.photos.search', {query: query.value, page})
+  photos.value = page === 1 ? result.results : [...photos.value, ...result.results]
+  lastQuery = query.value; nextPage.value = result.nextPage
+  if (!photos.value.length) photoMessage.value = __('No photos found.')
+ } catch {photoMessage.value = __('Photo search is not available yet. Try again later.')}
+ finally {searching.value = false}
+}
 
 const emit = defineEmits(['select'])
 

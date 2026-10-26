@@ -1,0 +1,42 @@
+{
+ "doctype": "DocType",
+ "name": "LMS App Invitation",
+ "module": "LMS",
+ "autoname": "hash",
+ "engine": "InnoDB",
+ "field_order": [
+  "invitation_ref",
+  "member",
+  "role"
+ ],
+ "fields": [
+  {
+   "fieldname": "invitation_ref",
+   "fieldtype": "Data",
+   "label": "Invitation reference",
+   "unique": 1,
+   "reqd": 1
+  },
+  {
+   "fieldname": "member",
+   "fieldtype": "Link",
+   "options": "User",
+   "label": "Member",
+   "reqd": 1
+  },
+  {
+   "fieldname": "role",
+   "fieldtype": "Data",
+   "label": "Role",
+   "reqd": 1
+  }
+ ],
+ "permissions": [
+  {
+   "role": "System Manager",
+   "read": 1
+  }
+ ],
+ "sort_field": "creation",
+ "sort_order": "DESC"
+}

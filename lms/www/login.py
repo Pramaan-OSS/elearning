@@ -14,6 +14,8 @@ def get_context(context):
     context.user_category = settings.user_category
     context.signup_consent = frappe.utils.sanitize_html(settings.custom_signup_content or "")
     context.csrf_token = get_csrf_token()
+    from lms.integrations.social import providers
+    context.social_providers = providers()
     if frappe.session.user != "Guest":
         frappe.local.flags.redirect_location = "/lms"
         raise frappe.Redirect

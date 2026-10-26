@@ -19,6 +19,8 @@ h1{font-family:Georgia,serif;font-weight:400;font-size:28px;margin:20px 0}p,labe
 <label for="login_password">Password</label><input id="login_password" name="pwd" type="password" autocomplete="current-password" required>
 <button type="submit">Log in</button>
 </form>
+{% if social_providers %}<p>Connected sign-in — not yet live-verified</p>
+{% for provider in social_providers %}<button type="button" class="connected-signin" data-provider="{{ provider | e }}">Continue with connected account {{ loop.index }}</button>{% endfor %}{% endif %}
 <form id="reset" hidden>
 <p>Enter your email to request a password reset.</p>
 <label for="reset_email">Email</label><input id="reset_email" name="user" type="email" autocomplete="email" required>
@@ -38,6 +40,17 @@ h1{font-family:Georgia,serif;font-weight:400;font-size:28px;margin:20px 0}p,labe
 <a href="#reset" id="switch">Forgot password?</a>
 <script>
 const message = document.getElementById('message');
+document.querySelectorAll('.connected-signin').forEach(button => button.addEventListener('click', async () => {
+ button.disabled=true;
+ try {
+  const response=await fetch('/api/method/lms.integrations.social.start',{method:'POST',headers:{'Content-Type':'application/json','X-Frappe-CSRF-Token':{{ csrf_token | tojson }}},body:JSON.stringify({provider_key:button.dataset.provider})});
+  if(!response.ok) throw new Error();
+  const data=await response.json();location.assign(data.message.url);
+ } catch {message.textContent='Connected sign-in is not available yet. Use password sign-in.';message.hidden=false;}
+ finally {button.disabled=false;}
+}));
+if(new URLSearchParams(location.search).has('signin')) {message.textContent='Connected sign-in could not be completed. Use password sign-in.';message.hidden=false;}
+
 const signin = document.getElementById('signin');
 const reset = document.getElementById('reset');
 const signup = document.getElementById('signup');

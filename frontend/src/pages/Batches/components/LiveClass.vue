@@ -26,7 +26,7 @@
 				:key="cls.name"
 				class="flex flex-col border rounded-5 h-full text-ink-gray-7 hover:border-outline-gray-3 p-3"
 				:class="{
-					'cursor-pointer': isAdmin() && cls.attendees > 0,
+					'cursor-pointer': canManageClasses(),
 				}"
 				@click="
 					() => {
@@ -41,6 +41,7 @@
 					{{ cls.description }}
 				</div>
 				<div class="mt-auto space-y-3">
+                    <Button v-if="canManageClasses()" @click.stop="openAttendanceModal(cls)">{{ __("Attendance") }}</Button>
 					<div class="flex items-center gap-x-2">
 						<span class="lucide-calendar w-4 h-4" />
 						<span>
@@ -124,10 +125,6 @@
 	/>
 </template>
 <script setup>
-// TODO(a11y): the class card is click-activated — it opens the attendance
-// modal — but carries nested Start/Join anchors, so it cannot become a
-// <button> without invalid nesting. Reaching it by keyboard needs a dedicated
-// action control, which is a redesign rather than an attribute.
 import {
 	Alert,
 	createListResource,
@@ -272,8 +269,7 @@ const hasClassEnded = (cls) => {
 }
 
 const openAttendanceModal = (cls) => {
-	if (!isAdmin()) return
-	if (cls.attendees <= 0) return
+	if (!canManageClasses()) return
 	attendanceFor.value = cls
 	showAttendance.value = true
 }

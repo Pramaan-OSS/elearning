@@ -33,7 +33,9 @@
   "section_break_yrpq",
   "start_url",
   "column_break_yokr",
-  "join_url"
+  "join_url",
+  "meeting_end_user_ref",
+  "attendance_report"
  ],
  "fields": [
   {
@@ -186,6 +188,22 @@
    "label": "Invite Attempts",
    "no_copy": 1,
    "read_only": 1
+  },
+  {
+   "fieldname": "meeting_end_user_ref",
+   "fieldtype": "Data",
+   "label": "Meeting account reference",
+   "hidden": 1,
+   "read_only": 1,
+   "permlevel": 1
+  },
+  {
+   "fieldname": "attendance_report",
+   "fieldtype": "Long Text",
+   "label": "Attendance report",
+   "hidden": 1,
+   "read_only": 1,
+   "permlevel": 1
   }
  ],
  "grid_page_length": 50,

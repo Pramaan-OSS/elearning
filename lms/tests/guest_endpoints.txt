@@ -38,3 +38,6 @@ lms.lms.utils.get_reviews
 lms.integrations.social.start
 lms.integrations.social.status
 lms.integrations.social.callback
+
+# One-time app invitations are accepted by the app server; no password or role input.
+lms.integrations.invitations.accept
