@@ -16,7 +16,7 @@
     "node": ">=24"
   },
   "devDependencies": {
-    "@playwright/test": "^1.56.0"
+    "@playwright/test": "1.65.0"
   },
   "dependencies": {
     "pre-commit": "^1.2.2"
